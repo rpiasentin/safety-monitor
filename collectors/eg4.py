@@ -97,8 +97,6 @@ BANNER_OFFSETS = {
 
 BANNER_LENGTH = 197  # bytes
 
-BANNER_LENGTH = 197  # bytes
-
 
 class EG4Client:
     """
