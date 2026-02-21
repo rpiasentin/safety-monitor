@@ -273,3 +273,45 @@ def get_recent_alerts(hours: int = 48, path: str = DB_PATH) -> list[dict]:
             ORDER BY triggered_at DESC
         """, (f"-{hours} hours",)).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_latest_merged_all(path: str = DB_PATH) -> dict[str, dict]:
+    """
+    Return the most recent 'merged' row per property.
+    Preferred over get_latest_readings_all() for the dashboard —
+    merged rows contain the full cross-source rollup.
+    Falls back to any source if no merged row exists yet.
+    """
+    with get_conn(path) as conn:
+        rows = conn.execute("""
+            SELECT r.*
+            FROM readings r
+            INNER JOIN (
+                SELECT property_id, MAX(collected_at) as max_time
+                FROM readings
+                WHERE source = 'merged'
+                GROUP BY property_id
+            ) latest ON r.property_id = latest.property_id
+                     AND r.collected_at = latest.max_time
+                     AND r.source = 'merged'
+        """).fetchall()
+        result = {dict(r)["property_id"]: dict(r) for r in rows}
+
+        # Fall back: properties that have no 'merged' row yet
+        if len(result) < len(conn.execute(
+                "SELECT DISTINCT property_id FROM readings").fetchall()):
+            fallback_rows = conn.execute("""
+                SELECT r.*
+                FROM readings r
+                INNER JOIN (
+                    SELECT property_id, MAX(collected_at) as max_time
+                    FROM readings GROUP BY property_id
+                ) latest ON r.property_id = latest.property_id
+                         AND r.collected_at = latest.max_time
+            """).fetchall()
+            for r in fallback_rows:
+                d = dict(r)
+                if d["property_id"] not in result:
+                    result[d["property_id"]] = d
+
+    return result

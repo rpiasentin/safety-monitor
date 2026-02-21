@@ -20,7 +20,7 @@ def _collector_for(property_id: str, coll_cfg: dict):
     """Instantiate the right collector class from a config block."""
     t = coll_cfg.get("type")
     if t == "eg4":
-        return EG4Client()          # reads from .env / config directly
+        return EG4Client()
     if t == "victron":
         return VictronClient()
     if t == "ha_api":
@@ -73,7 +73,7 @@ class PropertyCollector:
 
             snapshot["sources"][ctype] = data
 
-            # Persist to DB
+            # Persist individual source row
             db.upsert_reading(self.prop_id, ctype, data)
 
             # Persist Hubitat device battery list
@@ -81,43 +81,48 @@ class PropertyCollector:
             if devices:
                 db.upsert_hubitat_devices(self.prop_id, devices)
 
-        # Build rolled-up fields for quick dashboard access
+        # Build rolled-up fields (canonical field names matching db schema)
         snapshot.update(_rollup(snapshot["sources"]))
+
+        # Persist one "merged" row that the dashboard queries — guarantees
+        # a single complete row per property rather than one row per source.
+        if snapshot["sources"]:
+            db.upsert_reading(self.prop_id, "merged", snapshot)
+
         return snapshot
 
 
 def _rollup(sources: dict) -> dict:
     """
-    Produce flat summary fields from the raw source dicts.
-    Priority: eg4 for solar SOC/voltage; victron for PV power confirmation;
-              ha_api for temps and devices.
+    Produce flat merged fields from all source dicts.
+    Uses the same field names as the raw collector dicts so that
+    db.upsert_reading() can read them without any mapping.
     """
+    eg4 = sources.get("eg4") or {}
+    vic = sources.get("victron") or {}
+    ha  = sources.get("ha_api") or {}
+    hub = sources.get("hubitat_cloud") or {}
+
     out: dict = {}
 
-    eg4 = sources.get("eg4") or sources.get("EG4Client") or {}
-    vic = sources.get("victron") or sources.get("VictronCollector") or {}
-    ha  = sources.get("ha_api") or sources.get("HACollector") or {}
-    hub = sources.get("hubitat_cloud") or sources.get("HubitatCloudCollector") or {}
+    # Solar — EG4 is primary for SOC/voltage; Victron confirms PV power
+    out["soc"]           = eg4.get("soc") or vic.get("soc")
+    out["voltage"]       = eg4.get("voltage") or vic.get("voltage")
+    out["pv_total_power"]= eg4.get("pv_total_power") or vic.get("pv_power")
+    out["max_cell_temp"] = eg4.get("max_cell_temp")
+    out["victron_soc"]   = vic.get("soc")        # for side-by-side display
 
-    # Solar
-    out["soc"]            = eg4.get("soc") or vic.get("soc")
-    out["battery_voltage"]= eg4.get("voltage") or vic.get("voltage")
-    out["pv_power_w"]     = eg4.get("pv_total_power") or vic.get("pv_power")
-    out["inverter_temp"]  = eg4.get("max_cell_temp")
-    out["victron_soc"]    = vic.get("soc")
+    # Temperature (prefer HA, fall back to Hubitat cloud)
+    out["primary_temp"]  = ha.get("primary_temp") if ha.get("primary_temp") is not None \
+                           else hub.get("primary_temp")
+    out["all_temps"]     = {**(ha.get("temperatures") or {}),
+                             **(hub.get("temperatures") or {})}
 
-    # Temperature (prefer ha_api, fall back to hubitat_cloud)
-    ha_temp  = ha.get("primary_temp")
-    hub_temp = hub.get("primary_temp")
-    out["primary_temp"]      = ha_temp if ha_temp is not None else hub_temp
-    out["all_temps"]         = {**(ha.get("temperatures") or {}),
-                                 **(hub.get("temperatures") or {})}
-
-    # Battery devices
+    # Device batteries (merged from all sources)
     out["battery_devices"] = (ha.get("battery_devices") or []) + \
                               (hub.get("battery_devices") or [])
 
-    # Tesla
+    # Tesla (only from ha_api, High Country)
     out["tesla"] = ha.get("tesla")
 
     return out

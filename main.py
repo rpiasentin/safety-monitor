@@ -92,7 +92,7 @@ templates.env.globals.update({
 async def dashboard(request: Request):
     """Main live dashboard — auto-refreshes every 60 s."""
     props  = CONFIG.get("properties", [])
-    latest = db.get_latest_readings_all()
+    latest = db.get_latest_merged_all()
     alerts = db.get_recent_alerts(hours=24)
 
     # Build per-property context

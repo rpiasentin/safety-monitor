@@ -105,16 +105,10 @@
                   <p class="text-sm font-semibold">{{ fmt_power(card.reading.get('pv_power')) }}</p>
                 </div>
                 {% endif %}
-                {% if card.reading.get('victron_soc') %}
-                <div>
-                  <p class="text-xs text-gray-500">Victron SOC</p>
-                  <p class="text-sm font-semibold">{{ fmt_pct(card.reading.get('victron_soc')) }}</p>
-                </div>
-                {% endif %}
-                {% if card.reading.get('inverter_temp') %}
+                {% if card.reading.get('temperature') %}
                 <div>
                   <p class="text-xs text-gray-500">Inverter Temp</p>
-                  <p class="text-sm font-semibold">{{ card.reading.get('inverter_temp')|round(0)|int }}°C</p>
+                  <p class="text-sm font-semibold">{{ card.reading.get('temperature')|round(0)|int }}°C</p>
                 </div>
                 {% endif %}
               </div>
