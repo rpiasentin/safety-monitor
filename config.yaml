@@ -1,98 +1,80 @@
-# Safety Monitoring System - Configuration
-# Copy this to config.yaml and fill in your values
-
 system:
   timezone: America/Denver
+  collection_interval_minutes: 15
   report_time: "08:00"
-  report_name_format: "SafetyReport_{date}.html"
+  db_path: data/safety_monitor.db
+  log_path: logs/safety_monitor.log
 
-locations:
-  high_country:
-    id: "hc"
-    subnet: "192.168.4.1/24"
-    hubitat_ip: "192.168.4.91"
-    primary_temp_sensor: "sensor.hc_main_temp"
-    devices:
-      - type: hubitat
-        api_method: ha_hacs
-        device_id: hubitat_hc
-  
-  forgetmenot:
-    id: "fm"
-    subnet: "192.168.2.1/24"
-    hubitat_ip: "192.168.2.25"
-    primary_temp_sensor: "sensor.fm_main_temp"
-    devices:
-      - type: hubitat
-        api_method: ha_hacs
-        device_id: hubitat_fm
+web:
+  host: "0.0.0.0"
+  port: 8000
+  title: "Safety Monitor"
+
+ha:
+  url: "http://haos-vm.local:8123"
+
+properties:
+  - id: fm
+    name: "Forgetmenot"
+    subnet: "192.168.2.0/24"
+    enabled: true
+    collectors:
       - type: eg4
-        api_method: local           # or "cloud" for monitor.eg4electronics.com
         host: "192.168.2.49"
-        # Confirm local path with: curl -u user:pass http://192.168.2.49 then check DevTools
-        # Common paths: /api/status, /inverter_api/data, /api/realtime_data
-        local_path: "/api/status"   # TODO: verify with DevTools on inverter web UI
-        auth_method: basic          # credentials in EG4_USERNAME / EG4_PASSWORD
+        port: 8000
       - type: victron
-        api_method: mqtt          # Venus OS MQTT broker — no auth on LAN
         host: "192.168.2.132"
-        port: 1883
-        # portal_id set via VICTRON_PORTAL_ID env var
-        # Find it: Remote Console → Settings → VRM Portal ID
-  
-  redwood:
-    id: "rd"
-    primary_temp_sensor: "sensor.rd_main_temp"
-    devices:
-      - type: hubitat
-        api_method: cloud
-        endpoint: "https://cloud.hubitat.com/api/0709134d-2660-43bc-a6d5-a48d98e8ad1b/apps/58/devices/all"
-  
-  lariat:
-    id: "lr"
-    subnet: "192.168.1.1/24"
-    hubitat_ip: "192.168.1.134"
-    primary_temp_sensor: "sensor.lr_main_temp"
-    devices:
-      - type: hubitat
-        api_method: ha_hacs
-        device_id: hubitat_lr
+        mqtt_port: 1883
+      - type: ha_api
+        location_id: fm
+        primary_temp_sensor: "sensor.fm_main_temp"
 
-apis:
-  home_assistant:
-    url: "http://haos-vm.local:8123"
-    # Token set via HA_LONG_LIVED_TOKEN env var
-  
-  tesla:
-    method: ha_integration
+  - id: hc
+    name: "High Country"
+    subnet: "192.168.4.0/24"
+    enabled: true
+    collectors:
+      - type: ha_api
+        location_id: hc
+        primary_temp_sensor: "sensor.hc_main_temp"
+        include_tesla: true
+
+  - id: lr
+    name: "Lariat"
+    subnet: "192.168.1.0/24"
+    enabled: true
+    collectors:
+      - type: ha_api
+        location_id: lr
+        primary_temp_sensor: "sensor.lr_main_temp"
+
+  - id: rd
+    name: "Redwood"
+    enabled: true
+    collectors:
+      - type: hubitat_cloud
+        endpoint: "https://cloud.hubitat.com/api/0709134d-2660-43bc-a6d5-a48d98e8ad1b/apps/58/devices/all"
+        primary_temp_sensor: "sensor.rd_main_temp"
 
 alerts:
   temperature:
+    enabled: true
     threshold_fahrenheit: 40
+    critical_fahrenheit: 32
     indoor_only: true
     pushover_enabled: true
-    sms_enabled: false
-  battery:
-    low_threshold_percent: 20
-    exclude_devices: []
+    cooldown_minutes: 60
 
-report:
-  sections:
-    - id: "forgetmenot_solar"
-      title: "Forgetmenot Solar (EG4 + Victron)"
-      type: "solar"
-    - id: "tesla"
-      title: "Tesla (High Country)"
-      type: "tesla"
-    - id: "hc_temps"
-      title: "High Country - Temps & Batteries"
-      type: "location_status"
-    - id: "fm_temps"
-      title: "Forgetmenot - Temps & Batteries"
-      type: "location_status"
-    - id: "rd_temps"
-      title: "Redwood - Temps & Batteries"
-      type: "location_status"
-    - id: "lr_temps"
-      title: "Lariat - Temps & Batteries"
-      type: "location_status"
+  battery:
+    enabled: true
+    low_threshold_percent: 20
+    critical_threshold_percent: 10
+    exclude_devices: []
+    pushover_enabled: true
+    cooldown_minutes: 120
+
+  offline:
+    enabled: true
+    timeout_minutes: 30
+    pushover_enabled: true
+    cooldown_minutes: 120

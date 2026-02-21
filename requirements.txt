@@ -1,28 +1,24 @@
-# Safety Monitoring System — Python Dependencies
-# Install: pip install -r requirements.txt
+# Web framework
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+jinja2==3.1.4
 
-# HTTP & environment
+# Scheduling
+apscheduler==3.10.4
+
+# HTTP
 requests==2.31.0
-python-dotenv==1.0.0
-
-# Templating
-jinja2==3.1.2
-
-# Timezone
-pytz==2024.1
-
-# Google Drive upload
-google-auth==2.25.2
-google-auth-oauthlib==1.2.0
-google-auth-httplib2==0.2.0
-google-api-python-client==2.106.0
-
-# Victron Venus OS — MQTT data collection
-# Venus OS exposes a local MQTT broker on port 1883 (no auth on LAN).
-# This replaces the incorrect /status HTTP endpoint assumption.
 paho-mqtt==1.6.1
 
-# EG4 cloud API (optional — only needed if EG4_USE_CLOUD=true)
-# pylxpweb provides canonical field names and handles auth/scaling.
-# Uncomment to enable cloud-based EG4 data collection:
-# pylxpweb
+# Config / env
+python-dotenv==1.0.0
+pyyaml==6.0.1
+pytz==2024.1
+
+# Google Drive
+google-auth==2.29.0
+google-auth-httplib2==0.2.0
+google-api-python-client==2.127.0
+
+# Pushover (via requests, no extra lib needed)
+# pysolarmanv5 intentionally excluded — SN overflows uint32

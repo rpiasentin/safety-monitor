@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ config.web.title }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta http-equiv="refresh" content="60">
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .soc-ring { transition: stroke-dashoffset 0.5s ease; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- Header -->
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="text-2xl">🏔</span>
+      <h1 class="text-xl font-bold text-white tracking-tight">Safety Monitor</h1>
+    </div>
+    <div class="flex items-center gap-4 text-sm text-gray-400">
+      {% set total_alerts = alerts|length %}
+      {% if total_alerts > 0 %}
+        <span class="bg-red-600 text-white px-3 py-1 rounded-full font-semibold">
+          ⚠ {{ total_alerts }} alert{{ 's' if total_alerts != 1 }}
+        </span>
+      {% else %}
+        <span class="bg-green-900 text-green-300 px-3 py-1 rounded-full font-semibold">✓ All clear</span>
+      {% endif %}
+      <span id="clock" class="font-mono tabular-nums"></span>
+      <span class="text-gray-600">auto-refresh 60s</span>
+    </div>
+  </header>
+
+  <main class="p-6 max-w-7xl mx-auto">
+
+    <!-- Property cards grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+      {% for card in cards %}
+      <div class="bg-gray-900 rounded-2xl border {% if card.alert_count > 0 %}border-red-700{% else %}border-gray-800{% endif %} overflow-hidden">
+
+        <!-- Card header -->
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+          <div>
+            <h2 class="text-lg font-bold text-white">{{ card.name }}</h2>
+            <p class="text-xs text-gray-500 font-mono">{{ card.id }}</p>
+          </div>
+          <div class="flex items-center gap-2">
+            {% if card.alert_count > 0 %}
+              <span class="bg-red-600 text-white text-xs px-2 py-0.5 rounded-full font-semibold">
+                {{ card.alert_count }} alert{{ 's' if card.alert_count != 1 }}
+              </span>
+            {% endif %}
+            {% if card.reading %}
+              <span class="text-xs text-gray-500">{{ ago(card.reading.get('collected_at')) }}</span>
+              <span class="w-2 h-2 rounded-full bg-green-400"></span>
+            {% else %}
+              <span class="text-xs text-gray-500">no data</span>
+              <span class="w-2 h-2 rounded-full bg-gray-600"></span>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="p-5 space-y-5">
+
+          <!-- Solar section (fm only — has EG4/Victron) -->
+          {% if card.reading.get('soc') is not none %}
+          <div>
+            <p class="text-xs uppercase tracking-wider text-gray-500 mb-3 font-semibold">Solar / Battery</p>
+            <div class="flex items-center gap-6">
+
+              <!-- SOC gauge -->
+              <div class="relative flex-shrink-0">
+                {% set soc = card.reading.get('soc', 0) %}
+                {% set r = 36 %}
+                {% set circ = (2 * 3.14159 * r)|round(1) %}
+                {% set offset = (circ * (1 - soc/100))|round(1) %}
+                {% set gauge_color = 'stroke-red-500' if soc < 10 else ('stroke-orange-500' if soc < 20 else ('stroke-yellow-400' if soc < 40 else 'stroke-green-500')) %}
+                <svg width="90" height="90" viewBox="0 0 90 90">
+                  <circle cx="45" cy="45" r="{{ r }}" fill="none" stroke="#374151" stroke-width="8"/>
+                  <circle cx="45" cy="45" r="{{ r }}" fill="none"
+                    class="{{ gauge_color }} soc-ring"
+                    stroke-width="8"
+                    stroke-dasharray="{{ circ }}"
+                    stroke-dashoffset="{{ offset }}"
+                    stroke-linecap="round"
+                    transform="rotate(-90 45 45)"/>
+                  <text x="45" y="49" text-anchor="middle"
+                    class="fill-white" font-size="16" font-weight="bold">{{ soc|int }}%</text>
+                </svg>
+              </div>
+
+              <!-- Readings -->
+              <div class="grid grid-cols-2 gap-x-6 gap-y-2 flex-1">
+                {% if card.reading.get('voltage') %}
+                <div>
+                  <p class="text-xs text-gray-500">Voltage</p>
+                  <p class="text-sm font-semibold">{{ fmt_voltage(card.reading.get('voltage')) }}</p>
+                </div>
+                {% endif %}
+                {% if card.reading.get('pv_power') %}
+                <div>
+                  <p class="text-xs text-gray-500">PV Power</p>
+                  <p class="text-sm font-semibold">{{ fmt_power(card.reading.get('pv_power')) }}</p>
+                </div>
+                {% endif %}
+                {% if card.reading.get('victron_soc') %}
+                <div>
+                  <p class="text-xs text-gray-500">Victron SOC</p>
+                  <p class="text-sm font-semibold">{{ fmt_pct(card.reading.get('victron_soc')) }}</p>
+                </div>
+                {% endif %}
+                {% if card.reading.get('inverter_temp') %}
+                <div>
+                  <p class="text-xs text-gray-500">Inverter Temp</p>
+                  <p class="text-sm font-semibold">{{ card.reading.get('inverter_temp')|round(0)|int }}°C</p>
+                </div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
+          <!-- Tesla section (hc only) -->
+          {% if card.reading.get('tesla_soc') is not none %}
+          <div>
+            <p class="text-xs uppercase tracking-wider text-gray-500 mb-3 font-semibold">Tesla</p>
+            <div class="flex items-center gap-4">
+              <span class="text-3xl">🚗</span>
+              <div class="grid grid-cols-2 gap-x-6 gap-y-1">
+                <div>
+                  <p class="text-xs text-gray-500">Battery</p>
+                  <p class="text-sm font-semibold">{{ fmt_pct(card.reading.get('tesla_soc')) }}</p>
+                </div>
+                {% if card.reading.get('tesla_charging') %}
+                <div>
+                  <p class="text-xs text-gray-500">Charging</p>
+                  <p class="text-sm font-semibold text-green-400">
+                    ⚡ {{ "%.1f kW"|format(card.reading.get('tesla_power_kw', 0)) }}
+                  </p>
+                </div>
+                {% else %}
+                <div>
+                  <p class="text-xs text-gray-500">Status</p>
+                  <p class="text-sm font-semibold text-gray-400">Idle</p>
+                </div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+          {% endif %}
+
+          <!-- Temperature -->
+          {% if card.primary_temp is not none %}
+          <div>
+            <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">Temperature</p>
+            <div class="flex items-center gap-3">
+              {% set ts = card.temp_status %}
+              <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold
+                {% if ts == 'critical' %}bg-red-900 text-red-300
+                {% elif ts == 'warning' %}bg-yellow-900 text-yellow-300
+                {% else %}bg-green-900 text-green-300{% endif %}">
+                {% if ts == 'critical' %}🥶{% elif ts == 'warning' %}🌡{% else %}🌡{% endif %}
+                {{ fmt_temp(card.primary_temp) }}
+              </span>
+              {% if ts == 'critical' %}<span class="text-xs text-red-400 font-semibold">FREEZING RISK</span>
+              {% elif ts == 'warning' %}<span class="text-xs text-yellow-400">Near threshold</span>{% endif %}
+            </div>
+          </div>
+          {% endif %}
+
+          <!-- Device batteries -->
+          {% if card.devices %}
+          <div>
+            <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">
+              Device Batteries ({{ card.devices|length }})
+            </p>
+            <div class="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+              {% for dev in card.devices %}
+              {% set bs = battery_status(dev.battery_pct) %}
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-gray-300 truncate max-w-[65%]">{{ dev.friendly_name }}</span>
+                <span class="font-semibold flex-shrink-0
+                  {% if bs == 'critical' %}text-red-400
+                  {% elif bs == 'low' %}text-yellow-400
+                  {% else %}text-green-400{% endif %}">
+                  {{ fmt_pct(dev.battery_pct) }}
+                </span>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          {% endif %}
+
+          <!-- No data state -->
+          {% if not card.reading %}
+          <div class="flex flex-col items-center py-6 text-gray-600">
+            <span class="text-4xl mb-2">📡</span>
+            <p class="text-sm">No data collected yet</p>
+            <p class="text-xs">Waiting for first collection cycle...</p>
+          </div>
+          {% endif %}
+
+        </div><!-- /card body -->
+      </div><!-- /card -->
+      {% endfor %}
+    </div><!-- /grid -->
+
+    <!-- Recent alerts -->
+    {% if alerts %}
+    <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
+      <div class="px-5 py-4 border-b border-gray-800">
+        <h2 class="text-base font-bold text-white">Recent Alerts (last 48h)</h2>
+      </div>
+      <div class="divide-y divide-gray-800">
+        {% for alert in alerts %}
+        <div class="px-5 py-3 flex items-start gap-3">
+          <span class="flex-shrink-0 mt-0.5
+            {% if alert.severity == 'critical' %}text-red-400
+            {% else %}text-yellow-400{% endif %}">
+            {% if alert.alert_type == 'temperature' %}🌡
+            {% elif alert.alert_type == 'battery' %}🔋
+            {% elif alert.alert_type == 'offline' %}📡
+            {% else %}⚠{% endif %}
+          </span>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm text-gray-200">{{ alert.message }}</p>
+            <p class="text-xs text-gray-500 mt-0.5">
+              {{ ago(alert.triggered_at) }}
+              {% if alert.pushover_sent %} · pushed{% endif %}
+            </p>
+          </div>
+          <span class="text-xs font-mono text-gray-600 flex-shrink-0">{{ alert.property_id }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="text-center py-6 text-gray-700 text-xs">
+    Safety Monitor · Tailscale-accessible · data refreshes every 15 min · page auto-refreshes every 60s
+  </footer>
+
+  <script>
+    // Live clock
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('clock').textContent =
+        now.toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit', timeZoneName:'short'});
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+  </script>
+
+</body>
+</html>

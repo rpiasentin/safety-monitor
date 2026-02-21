@@ -1,0 +1,18 @@
+[Unit]
+Description=Safety Monitor — Live Dashboard & Data Collection
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=safetymon
+WorkingDirectory=/opt/safety-monitor/app
+EnvironmentFile=/opt/safety-monitor/.env
+ExecStart=/usr/bin/python3 /opt/safety-monitor/app/main.py
+Restart=on-failure
+RestartSec=15
+StandardOutput=append:/opt/safety-monitor/logs/safety-monitor.log
+StandardError=append:/opt/safety-monitor/logs/safety-monitor.log
+
+[Install]
+WantedBy=multi-user.target
