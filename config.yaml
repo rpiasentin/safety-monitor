@@ -11,7 +11,7 @@ web:
   title: "Safety Monitor"
 
 ha:
-  url: "http://192.168.1.62:8123"
+  url: "http://100.82.158.122:8123"
 
 properties:
   - id: fm
