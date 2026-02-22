@@ -25,28 +25,27 @@ properties:
       - type: victron
         host: "192.168.2.132"
         mqtt_port: 1883
-      - type: ha_api
-        location_id: fm
-        primary_temp_sensor: "sensor.fm_main_temp"
+      - type: hubitat_cloud
+        endpoint: "https://cloud.hubitat.com/api/4ea3d66e-7d03-475d-9397-8324c32b1bdc/apps/14/devices/all"
+        primary_temp_sensor: "Forget Basement temperature"
 
   - id: hc
     name: "High Country"
     subnet: "192.168.4.0/24"
     enabled: true
     collectors:
-      - type: ha_api
-        location_id: hc
-        primary_temp_sensor: "sensor.hc_main_temp"
-        include_tesla: true
+      - type: hubitat_cloud
+        endpoint: "https://cloud.hubitat.com/api/8d4cc6c3-ce67-4421-8984-5669cb4d4696/apps/82/devices/all"
+        primary_temp_sensor: "B1-Bguestroom"
 
   - id: lr
     name: "Lariat"
     subnet: "192.168.1.0/24"
     enabled: true
     collectors:
-      - type: ha_api
-        location_id: lr
-        primary_temp_sensor: "sensor.lr_main_temp"
+      - type: hubitat_cloud
+        endpoint: "https://cloud.hubitat.com/api/6d7091ac-7444-4e72-b01d-6d07b1e5dc65/apps/28/devices/all"
+        primary_temp_sensor: "Garage door sensor"
 
   - id: rd
     name: "Redwood"

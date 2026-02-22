@@ -1,14 +1,14 @@
 """
-Hubitat Cloud API collector — used for Redwood (rd) which has no local HA.
-All other properties access Hubitat via HA HACS integration (see ha_api.py).
+Hubitat Cloud API collector — used for properties with Hubitat hubs.
 
-Env vars:
-  HUBITAT_CLOUD_TOKEN   — Maker API access token from Hubitat cloud portal
+Env vars (per-property, fallback to generic):
+  HUBITAT_{PROPERTY_ID}_TOKEN   e.g. HUBITAT_FM_TOKEN, HUBITAT_HC_TOKEN
+  HUBITAT_CLOUD_TOKEN           fallback if no per-property token set
 
 Config block:
   type: hubitat_cloud
   endpoint: "https://cloud.hubitat.com/api/<uuid>/apps/<id>/devices/all"
-  primary_temp_sensor: "sensor.rd_main_temp"
+  primary_temp_sensor: "Device Label"   # matches Hubitat device label
 """
 
 import logging
@@ -42,54 +42,66 @@ class HubitatCloudClient:
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _attr_value(attrs, key: str):
+        """Extract a value from attributes whether dict or list format."""
+        if isinstance(attrs, dict):
+            return attrs.get(key)
+        # list format: [{"name": "temperature", "currentValue": "50.3"}, ...]
+        for attr in attrs:
+            if attr.get("name") == key:
+                return attr.get("currentValue")
+        return None
+
     def get_temperature_sensors(self, devices: list[dict] | None = None) -> dict[str, float]:
-        """Return {device_name: °F}. Hubitat reports in °F by default."""
+        """Return {device_label: °F}. Hubitat reports in °F by default."""
         if devices is None:
             devices = self.get_all_devices()
         result: dict[str, float] = {}
         for d in devices:
-            attrs = d.get("attributes", [])
-            for attr in attrs:
-                if attr.get("name") == "temperature":
-                    val = attr.get("currentValue")
-                    if val is not None:
-                        try:
-                            result[d.get("label", d.get("name", str(d.get("id"))))] = float(val)
-                        except (ValueError, TypeError):
-                            pass
+            attrs = d.get("attributes", {})
+            val = self._attr_value(attrs, "temperature")
+            if val is not None:
+                try:
+                    result[d.get("label", d.get("name", str(d.get("id"))))] = float(val)
+                except (ValueError, TypeError):
+                    pass
         return result
 
     def get_battery_devices(self, devices: list[dict] | None = None) -> list[dict]:
-        """Return list of {id, name, battery_pct} for devices reporting battery."""
+        """Return list of {entity_id, friendly_name, battery_pct} for battery devices."""
         if devices is None:
             devices = self.get_all_devices()
         result = []
         for d in devices:
-            attrs = d.get("attributes", [])
-            for attr in attrs:
-                if attr.get("name") == "battery":
-                    val = attr.get("currentValue")
-                    if val is not None:
-                        try:
-                            result.append({
-                                "entity_id":     str(d.get("id")),
-                                "friendly_name": d.get("label", d.get("name", "Unknown")),
-                                "battery_pct":   float(val),
-                                "unit":          "%",
-                                "type":          d.get("type", ""),
-                            })
-                        except (ValueError, TypeError):
-                            pass
-                        break
+            attrs = d.get("attributes", {})
+            val = self._attr_value(attrs, "battery")
+            if val is not None:
+                try:
+                    result.append({
+                        "entity_id":     str(d.get("id")),
+                        "friendly_name": d.get("label", d.get("name", "Unknown")),
+                        "battery_pct":   float(val),
+                        "unit":          "%",
+                        "type":          d.get("type", ""),
+                    })
+                except (ValueError, TypeError):
+                    pass
         return result
 
 
 class HubitatCloudCollector(BaseCollector):
-    """Collects Hubitat cloud data for Redwood (no local HA access)."""
+    """Collects Hubitat cloud data for properties without local HA access."""
 
     def __init__(self, property_id: str, cfg: dict):
         super().__init__(property_id, cfg)
-        self.client      = HubitatCloudClient(cfg["endpoint"])
+        # Token priority: config block → per-property env → generic env
+        token = (
+            cfg.get("token")
+            or os.getenv(f"HUBITAT_{property_id.upper()}_TOKEN")
+            or HUBITAT_TOKEN
+        )
+        self.client      = HubitatCloudClient(cfg["endpoint"], api_token=token)
         self.temp_sensor = cfg.get("primary_temp_sensor")
 
     def collect(self) -> dict | None:
