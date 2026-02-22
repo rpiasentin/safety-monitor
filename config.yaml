@@ -32,7 +32,7 @@ properties:
   - id: hc
     name: "High Country"
     subnet: "192.168.4.0/24"
-    enabled: true
+    enabled: false
     collectors:
       - type: hubitat_cloud
         endpoint: "https://cloud.hubitat.com/api/8d4cc6c3-ce67-4421-8984-5669cb4d4696/apps/82/devices/all"
