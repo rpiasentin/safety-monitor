@@ -105,14 +105,34 @@ def _rollup(sources: dict) -> dict:
 
     out: dict = {}
 
-    # Solar — Victron MQTT is primary (live SmartShunt + MPPT data);
-    # EG4 banner is fallback only (banner contains a static boot-time snapshot,
-    # not live register values, so it must not take precedence).
-    out["soc"]           = vic.get("soc") or eg4.get("soc")
-    out["voltage"]       = vic.get("voltage") or eg4.get("voltage")
-    out["pv_total_power"]= vic.get("pv_power") or eg4.get("pv_total_power")
-    out["max_cell_temp"] = eg4.get("max_cell_temp")
-    out["victron_soc"]   = vic.get("soc")        # for side-by-side display
+    # ── Solar / Battery rollup ───────────────────────────────────────────────
+    # SOC    — EG4 BMS cloud is authoritative (live from inverter BMS);
+    #           Victron SmartShunt is fallback (Coulomb-counting, accurate short-term)
+    # Voltage — Victron SmartShunt is primary (direct cell measurement)
+    # EG4 banner is NOT used for any live value (static boot-time snapshot)
+    out["soc"]            = eg4.get("soc") or vic.get("soc")
+    out["voltage"]        = vic.get("voltage") or eg4.get("voltage")
+    out["victron_soc"]    = vic.get("soc")          # side-by-side comparison
+    out["max_cell_temp"]  = eg4.get("max_cell_temp")
+
+    # Per-MPPT generation (3 independent controllers)
+    out["pv_eg4"]         = eg4.get("pv_total_power")   # EG4 internal MPPT
+    out["pv_victron_1"]   = vic.get("pv_charger_288")   # Victron MPPT charger 288
+    out["pv_victron_2"]   = vic.get("pv_charger_289")   # Victron MPPT charger 289
+
+    # Total PV = EG4 MPPT + both Victron MPPTs
+    pv_eg4 = eg4.get("pv_total_power") or 0.0
+    pv_vic = vic.get("pv_power")        or 0.0   # system/0/Dc/Pv/Power = 288+289 combined
+    out["pv_total_power"] = (pv_eg4 + pv_vic) if (pv_eg4 or pv_vic) else None
+
+    # Power flows
+    # battery_charging_power: net W from SmartShunt (positive = charging, negative = discharging)
+    out["battery_charging_power"] = vic.get("power")
+    out["current"]                = vic.get("current")   # stored in battery_current DB column
+    # power_to_user / load_power: house AC demand from EG4 cloud
+    load_w = eg4.get("power_to_user")
+    out["power_to_user"] = load_w    # picked up by upsert_reading → load_power DB column
+    out["load_power"]    = load_w    # available in raw_json for dashboard template
 
     # Temperature (prefer HA, fall back to Hubitat cloud)
     out["primary_temp"]  = ha.get("primary_temp") if ha.get("primary_temp") is not None \

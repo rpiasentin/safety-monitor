@@ -99,12 +99,27 @@
                   <p class="text-sm font-semibold">{{ fmt_voltage(card.reading.get('voltage')) }}</p>
                 </div>
                 {% endif %}
-                {% if card.reading.get('pv_power') %}
+
+                <!-- Battery charging power (Victron SmartShunt) -->
+                {% set chg = card.reading.get('battery_charging_power') %}
+                {% if chg is not none %}
+                <div>
+                  <p class="text-xs text-gray-500">Battery</p>
+                  {% if chg > 50 %}
+                    <p class="text-sm font-semibold text-green-400">⬆ {{ fmt_power(chg) }}</p>
+                  {% elif chg < -50 %}
+                    <p class="text-sm font-semibold text-yellow-400">⬇ {{ fmt_power(chg|abs) }}</p>
+                  {% else %}
+                    <p class="text-sm font-semibold text-gray-400">≈ 0 W</p>
+                  {% endif %}
+                </div>
+                {% elif card.reading.get('pv_power') %}
                 <div>
                   <p class="text-xs text-gray-500">PV Power</p>
                   <p class="text-sm font-semibold">{{ fmt_power(card.reading.get('pv_power')) }}</p>
                 </div>
                 {% endif %}
+
                 {% if card.reading.get('temperature') %}
                 <div>
                   <p class="text-xs text-gray-500">Inverter Temp</p>
@@ -113,6 +128,48 @@
                 {% endif %}
               </div>
             </div>
+
+            <!-- 3-MPPT generation breakdown (Forgetmenot only) -->
+            {% set pv_eg4 = card.reading.get('pv_eg4') %}
+            {% set pv_v1  = card.reading.get('pv_victron_1') %}
+            {% set pv_v2  = card.reading.get('pv_victron_2') %}
+            {% if pv_eg4 is not none or pv_v1 is not none or pv_v2 is not none %}
+            <div class="mt-3 bg-gray-800 rounded-xl px-4 py-3 space-y-1.5">
+              <p class="text-xs uppercase tracking-wider text-gray-500 font-semibold mb-2">Generation</p>
+              {% if pv_eg4 is not none %}
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-400">EG4 MPPT</span>
+                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_eg4) }}</span>
+              </div>
+              {% endif %}
+              {% if pv_v1 is not none %}
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-400">Victron #1 (288)</span>
+                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_v1) }}</span>
+              </div>
+              {% endif %}
+              {% if pv_v2 is not none %}
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-400">Victron #2 (289)</span>
+                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_v2) }}</span>
+              </div>
+              {% endif %}
+              {% if card.reading.get('pv_power') %}
+              <div class="flex justify-between text-sm border-t border-gray-700 pt-1.5 mt-1">
+                <span class="text-gray-300 font-semibold">Total PV</span>
+                <span class="font-bold text-white">{{ fmt_power(card.reading.get('pv_power')) }}</span>
+              </div>
+              {% endif %}
+              {% set load = card.reading.get('load_power') %}
+              {% if load is not none %}
+              <div class="flex justify-between text-sm border-t border-gray-700 pt-1.5 mt-1">
+                <span class="text-gray-400">House Load</span>
+                <span class="font-semibold text-blue-300">{{ fmt_power(load) }}</span>
+              </div>
+              {% endif %}
+            </div>
+            {% endif %}
+
           </div>
           {% endif %}
 

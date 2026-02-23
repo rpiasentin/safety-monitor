@@ -11,6 +11,7 @@ Run:
 Systemd service: see Safety_Monitor_Deployment_Guide.docx
 """
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -94,6 +95,19 @@ async def dashboard(request: Request):
     props  = CONFIG.get("properties", [])
     latest = db.get_latest_merged_all()
     alerts = db.get_recent_alerts(hours=24)
+
+    # Merge raw_json extra fields (pv_eg4, pv_victron_1/2, battery_charging_power,
+    # load_power, etc.) into each row so the template can access them directly.
+    for row in latest.values():
+        raw_str = row.get("raw_json")
+        if raw_str:
+            try:
+                raw = json.loads(raw_str)
+                for k, v in raw.items():
+                    if v is not None and row.get(k) is None:
+                        row[k] = v
+            except Exception:
+                pass
 
     # Build per-property context
     cards = []

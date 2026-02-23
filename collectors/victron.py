@@ -187,13 +187,17 @@ class VictronClient:
         got_batt = False
         got_pv   = False
 
-        TOPIC_BATTERIES = f"N/{pid}/system/0/Batteries"
-        TOPIC_PV_POWER  = f"N/{pid}/system/0/Dc/Pv/Power"
+        TOPIC_BATTERIES  = f"N/{pid}/system/0/Batteries"
+        TOPIC_PV_POWER   = f"N/{pid}/system/0/Dc/Pv/Power"
+        TOPIC_MPPT_288   = f"N/{pid}/solarcharger/288/Yield/Power"
+        TOPIC_MPPT_289   = f"N/{pid}/solarcharger/289/Yield/Power"
 
         def on_connect(client, userdata, flags, rc):
             if rc == 0:
                 client.subscribe(TOPIC_BATTERIES)
                 client.subscribe(TOPIC_PV_POWER)
+                client.subscribe(TOPIC_MPPT_288)
+                client.subscribe(TOPIC_MPPT_289)
                 # Keepalive triggers the broker to publish fresh retained values
                 client.publish(f"R/{pid}/keepalive", payload="[]")
             else:
@@ -232,7 +236,15 @@ class VictronClient:
                 elif msg.topic == TOPIC_PV_POWER:
                     result["pv_power"] = value
                     got_pv = True
-                    logger.debug("Victron PV power: %.1fW", value or 0)
+                    logger.debug("Victron PV combined: %.1fW", value or 0)
+
+                elif msg.topic == TOPIC_MPPT_288:
+                    result["pv_charger_288"] = value
+                    logger.debug("Victron MPPT 288: %.1fW", value or 0)
+
+                elif msg.topic == TOPIC_MPPT_289:
+                    result["pv_charger_289"] = value
+                    logger.debug("Victron MPPT 289: %.1fW", value or 0)
 
             except Exception as exc:
                 logger.warning("Victron MQTT parse error on %s: %s", msg.topic, exc)
