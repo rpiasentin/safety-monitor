@@ -28,6 +28,11 @@ properties:
       - type: hubitat_cloud
         endpoint: "https://cloud.hubitat.com/api/4ea3d66e-7d03-475d-9397-8324c32b1bdc/apps/14/devices/all"
         primary_temp_sensor: "Forget Basement temperature"
+    alerts:
+      outdoor_sensors:
+        - "Forget Deck temperature"
+      outdoor_temp_warning: 15
+      outdoor_temp_critical: 0
 
   - id: hc
     name: "High Country"
@@ -46,6 +51,14 @@ properties:
       - type: hubitat_cloud
         endpoint: "https://cloud.hubitat.com/api/6d7091ac-7444-4e72-b01d-6d07b1e5dc65/apps/28/devices/all"
         primary_temp_sensor: "Garage door sensor"
+    alerts:
+      exclude_sensors:
+        - "rpoffice"
+      outdoor_sensors:
+        - "Deck"
+        - "Coop sensor"
+      outdoor_temp_warning: 15
+      outdoor_temp_critical: 0
 
   - id: rd
     name: "Redwood"

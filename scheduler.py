@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 _scheduler: BackgroundScheduler | None = None
 _property_collectors: list[PropertyCollector] = []
 _alert_processor: alert_module.AlertProcessor | None = None
+_property_alert_cfgs: dict = {}   # pid → per-property alerts override dict
 
 
 def _load_config() -> dict:
@@ -50,7 +51,8 @@ def collect_all() -> None:
                         f"{temp:.1f}" if temp else "—",
                         len(errs))
             if _alert_processor:
-                _alert_processor.process(snapshot)
+                pcfg = _property_alert_cfgs.get(pid, {})
+                _alert_processor.process(snapshot, pcfg)
         except Exception as exc:
             logger.error("Collection run error [%s]: %s", pc.prop_id, exc)
     logger.info("=== Collection run complete ===")
@@ -104,16 +106,25 @@ def daily_summary() -> None:
 
 def start(config: dict) -> None:
     """Initialise collectors, alert processor, and start the scheduler."""
-    global _scheduler, _property_collectors, _alert_processor
+    global _scheduler, _property_collectors, _alert_processor, _property_alert_cfgs
 
     db.init_db()
 
+    properties = config.get("properties", [])
+
     # Build property collectors
     _property_collectors = [
-        PropertyCollector(p) for p in config.get("properties", [])
+        PropertyCollector(p) for p in properties
         if p.get("enabled", True)
     ]
     logger.info("Loaded %d property collectors", len(_property_collectors))
+
+    # Per-property alert overrides (alerts: block under each property)
+    _property_alert_cfgs = {
+        p["id"]: p.get("alerts", {})
+        for p in properties
+        if p.get("enabled", True)
+    }
 
     # Alert processor
     _alert_processor = alert_module.AlertProcessor(config.get("alerts", {}))

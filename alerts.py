@@ -6,6 +6,18 @@ Checks:
   - Collector offline (no data for > timeout_minutes)
   - Temperature below threshold (°F)
 
+Per-property alert config (under each property in config.yaml):
+  alerts:
+    exclude_sensors:          # skip these sensor names entirely
+      - "rpoffice"
+    outdoor_sensors:          # apply outdoor thresholds to these
+      - "Deck"
+      - "Coop sensor"
+    indoor_temp_warning: 40   # override global threshold
+    indoor_temp_critical: 32
+    outdoor_temp_warning: 15  # default 15°F
+    outdoor_temp_critical: 0  # default 0°F
+
 Pushover env vars:
   PUSHOVER_USER_KEY
   PUSHOVER_API_TOKEN
@@ -27,6 +39,8 @@ logger = logging.getLogger(__name__)
 PUSHOVER_USER  = os.getenv("PUSHOVER_USER_KEY", "")
 PUSHOVER_TOKEN = os.getenv("PUSHOVER_API_TOKEN", "")
 PUSHOVER_URL   = "https://api.pushover.net/1/messages.json"
+
+INVALID_TEMP_F = 0.0   # readings at exactly 0.0°F are treated as dead/virtual sensors
 
 
 def _send_pushover(title: str, message: str, priority: int = 0) -> bool:
@@ -75,13 +89,18 @@ class AlertProcessor:
     def __init__(self, alert_cfg: dict):
         self.cfg = alert_cfg
 
-    def process(self, snapshot: dict) -> list[dict]:
-        """Run all checks against a PropertyCollector snapshot. Returns fired alerts."""
+    def process(self, snapshot: dict, property_cfg: dict | None = None) -> list[dict]:
+        """
+        Run all checks against a PropertyCollector snapshot.
+        property_cfg: per-property alert overrides from config.yaml
+        Returns list of fired alerts.
+        """
         fired = []
         pid = snapshot.get("property_id", "unknown")
+        pcfg = property_cfg or {}
 
         if self.cfg.get("temperature", {}).get("enabled", True):
-            fired += self._check_temps(pid, snapshot)
+            fired += self._check_temps(pid, snapshot, pcfg)
 
         if self.cfg.get("battery", {}).get("enabled", True):
             fired += self._check_batteries(pid, snapshot)
@@ -93,29 +112,52 @@ class AlertProcessor:
 
     # ── Temperature ───────────────────────────────────────────────────────────
 
-    def _check_temps(self, pid: str, snapshot: dict) -> list[dict]:
+    def _check_temps(self, pid: str, snapshot: dict, property_cfg: dict) -> list[dict]:
         cfg = self.cfg.get("temperature", {})
-        threshold   = cfg.get("threshold_fahrenheit", 40)
-        critical    = cfg.get("critical_fahrenheit", 32)
-        cooldown    = cfg.get("cooldown_minutes", 60)
-        use_push    = cfg.get("pushover_enabled", True)
-        fired = []
+        cooldown = cfg.get("cooldown_minutes", 60)
+        use_push = cfg.get("pushover_enabled", True)
 
-        all_temps: dict = snapshot.get("all_temps") or {}
+        # Per-property overrides, fall back to global
+        indoor_warn = property_cfg.get("indoor_temp_warning",
+                                        cfg.get("threshold_fahrenheit", 40))
+        indoor_crit = property_cfg.get("indoor_temp_critical",
+                                        cfg.get("critical_fahrenheit", 32))
+        outdoor_warn = property_cfg.get("outdoor_temp_warning", 15)
+        outdoor_crit = property_cfg.get("outdoor_temp_critical", 0)
+
+        exclude  = {s.lower() for s in property_cfg.get("exclude_sensors", [])}
+        outdoors = {s.lower() for s in property_cfg.get("outdoor_sensors", [])}
+
+        fired = []
+        all_temps: dict = dict(snapshot.get("all_temps") or {})
         primary = snapshot.get("primary_temp")
         if primary is not None:
-            all_temps["primary"] = primary
+            all_temps.setdefault("primary", primary)
 
         for sensor_id, temp_f in all_temps.items():
+            # Skip excluded (virtual/dead) sensors
+            if sensor_id.lower() in exclude:
+                continue
+
+            # Skip obviously invalid readings (e.g. virtual device stuck at 0.0°F)
+            if temp_f == INVALID_TEMP_F:
+                continue
+
+            is_outdoor = sensor_id.lower() in outdoors
+            threshold  = outdoor_warn if is_outdoor else indoor_warn
+            critical   = outdoor_crit if is_outdoor else indoor_crit
+
             if temp_f >= threshold:
                 continue
             if not _cooldown_ok(pid, "temperature", sensor_id, cooldown):
                 continue
 
-            severity = "critical" if temp_f < critical else "medium"
-            msg = (f"{'🚨 FREEZING' if temp_f < critical else '⚠️ Low temp'} at "
+            severity      = "critical" if temp_f < critical else "medium"
+            location_type = "outdoor" if is_outdoor else "indoor"
+            emoji         = "🚨 FREEZING" if temp_f < critical else "⚠️ Low temp"
+            msg = (f"{emoji} ({location_type}) at "
                    f"{snapshot.get('property_name', pid)}: "
-                   f"{formatters.fmt_temp(temp_f)} ({sensor_id})")
+                   f"{formatters.fmt_temp(temp_f)} — {sensor_id}")
 
             alert_id = db.insert_alert(pid, "temperature", msg,
                                         sensor_id=sensor_id,
@@ -123,13 +165,16 @@ class AlertProcessor:
                                         severity=severity)
             if use_push:
                 priority = 1 if severity == "critical" else 0
-                ok = _send_pushover(f"Safety Monitor — {snapshot.get('property_name', pid)}", msg, priority)
+                ok = _send_pushover(
+                    f"Safety Monitor — {snapshot.get('property_name', pid)}", msg, priority)
                 if ok:
                     db.mark_alert_pushover_sent(alert_id)
 
             fired.append({"type": "temperature", "sensor": sensor_id,
-                           "value": temp_f, "severity": severity})
-            logger.warning("TEMP ALERT [%s] %s: %.1f°F", pid, sensor_id, temp_f)
+                           "value": temp_f, "severity": severity,
+                           "location": location_type})
+            logger.warning("TEMP ALERT [%s] %s: %.1f°F (%s)",
+                           pid, sensor_id, temp_f, location_type)
 
         return fired
 
@@ -206,7 +251,8 @@ class AlertProcessor:
                        f"no data collected. Errors: {'; '.join(snapshot['errors'])}")
                 alert_id = db.insert_alert(pid, "offline", msg, severity="high")
                 if use_push:
-                    ok = _send_pushover(f"Safety Monitor — {snapshot.get('property_name', pid)}", msg, priority=1)
+                    ok = _send_pushover(
+                        f"Safety Monitor — {snapshot.get('property_name', pid)}", msg, priority=1)
                     if ok:
                         db.mark_alert_pushover_sent(alert_id)
                 fired.append({"type": "offline", "severity": "high"})
