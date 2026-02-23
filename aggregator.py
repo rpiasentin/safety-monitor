@@ -105,10 +105,12 @@ def _rollup(sources: dict) -> dict:
 
     out: dict = {}
 
-    # Solar — EG4 is primary for SOC/voltage; Victron confirms PV power
-    out["soc"]           = eg4.get("soc") or vic.get("soc")
-    out["voltage"]       = eg4.get("voltage") or vic.get("voltage")
-    out["pv_total_power"]= eg4.get("pv_total_power") or vic.get("pv_power")
+    # Solar — Victron MQTT is primary (live SmartShunt + MPPT data);
+    # EG4 banner is fallback only (banner contains a static boot-time snapshot,
+    # not live register values, so it must not take precedence).
+    out["soc"]           = vic.get("soc") or eg4.get("soc")
+    out["voltage"]       = vic.get("voltage") or eg4.get("voltage")
+    out["pv_total_power"]= vic.get("pv_power") or eg4.get("pv_total_power")
     out["max_cell_temp"] = eg4.get("max_cell_temp")
     out["victron_soc"]   = vic.get("soc")        # for side-by-side display
 
