@@ -132,14 +132,29 @@
               </div>
             </div>
 
-            <!-- 3-MPPT generation breakdown (Forgetmenot only) -->
-            {% set pv_eg4 = card.reading.get('pv_eg4') %}
-            {% set pv_v1  = card.reading.get('pv_victron_1') %}
-            {% set pv_v2  = card.reading.get('pv_victron_2') %}
+            <!-- Generation breakdown (Forgetmenot: EG4 strings + Victron MPPTs) -->
+            {% set pv_eg4   = card.reading.get('pv_eg4') %}
+            {% set pv_eg4_1 = card.reading.get('pv_eg4_1') %}
+            {% set pv_eg4_2 = card.reading.get('pv_eg4_2') %}
+            {% set pv_v1    = card.reading.get('pv_victron_1') %}
+            {% set pv_v2    = card.reading.get('pv_victron_2') %}
             {% if pv_eg4 is not none or pv_v1 is not none or pv_v2 is not none %}
             <div class="mt-3 bg-gray-800 rounded-xl px-4 py-3 space-y-1.5">
               <p class="text-xs uppercase tracking-wider text-gray-500 font-semibold mb-2">Generation</p>
-              {% if pv_eg4 is not none %}
+              {% if pv_eg4_1 is not none %}
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-400">EG4 String 1</span>
+                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_eg4_1) }}</span>
+              </div>
+              {% endif %}
+              {% if pv_eg4_2 is not none %}
+              <div class="flex justify-between text-sm">
+                <span class="text-gray-400">EG4 String 2</span>
+                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_eg4_2) }}</span>
+              </div>
+              {% endif %}
+              {% if pv_eg4 is not none and pv_eg4_1 is none %}
+              {# Fallback: no per-string data, just show EG4 total #}
               <div class="flex justify-between text-sm">
                 <span class="text-gray-400">EG4 MPPT</span>
                 <span class="font-semibold text-yellow-300">{{ fmt_power(pv_eg4) }}</span>

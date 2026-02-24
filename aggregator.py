@@ -115,8 +115,11 @@ def _rollup(sources: dict) -> dict:
     out["victron_soc"]    = vic.get("soc")          # side-by-side comparison
     out["max_cell_temp"]  = eg4.get("max_cell_temp")
 
-    # Per-MPPT generation (3 independent controllers)
-    out["pv_eg4"]         = eg4.get("pv_total_power")   # EG4 internal MPPT
+    # Per-MPPT / per-string generation
+    # EG4 internal: ppv (total), ppv1 (string 1), ppv2 (string 2)
+    out["pv_eg4"]         = eg4.get("pv_total_power")   # EG4 total MPPT (all strings summed)
+    out["pv_eg4_1"]       = eg4.get("pv_string_1")      # EG4 string 1 (ppv1)
+    out["pv_eg4_2"]       = eg4.get("pv_string_2")      # EG4 string 2 (ppv2)
     out["pv_victron_1"]   = vic.get("pv_charger_288")   # Victron MPPT charger 288
     out["pv_victron_2"]   = vic.get("pv_charger_289")   # Victron MPPT charger 289
 

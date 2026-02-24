@@ -290,8 +290,9 @@ class EG4Client:
                 self._session = None   # force re-login next time
                 return None
             logger.debug(
-                "EG4 cloud runtime: soc=%s ppv=%sW pCharge=%sW peps=%sW tinner=%s°C",
+                "EG4 cloud runtime: soc=%s ppv=%sW (s1=%s s2=%s) pCharge=%sW peps=%sW tinner=%s°C",
                 raw.get("soc"), raw.get("ppv"),
+                raw.get("ppv1"), raw.get("ppv2"),
                 raw.get("pCharge"), raw.get("peps"), raw.get("tinner"),
             )
             return self._normalise_cloud(raw)
@@ -355,7 +356,15 @@ class EG4Client:
             result["voltage"] = float(v) / 10.0          # 540 → 54.0 V
 
         if (v := raw.get("ppv")) is not None:
-            result["pv_total_power"] = float(v)           # W
+            result["pv_total_power"] = float(v)           # W — sum of all EG4 strings
+
+        # Per-string MPPT breakdown (ppv1, ppv2 — matches Victron pv_charger_288/289 pattern)
+        if (v := raw.get("ppv1")) is not None:
+            result["pv_string_1"] = float(v)
+        if (v := raw.get("ppv2")) is not None:
+            result["pv_string_2"] = float(v)
+        if (v := raw.get("ppv3")) is not None:
+            result["pv_string_3"] = float(v)
 
         if (v := raw.get("pCharge")) is not None:
             result["charge_power"] = float(v)             # W
