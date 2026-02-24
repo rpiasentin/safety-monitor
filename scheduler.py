@@ -28,6 +28,11 @@ _alert_processor: alert_module.AlertProcessor | None = None
 _property_alert_cfgs: dict = {}   # pid → per-property alerts override dict
 
 
+def update_property_alert_cfg(pid: str, new_cfg: dict) -> None:
+    """Update in-memory alert config for one property (called after config.yaml save)."""
+    _property_alert_cfgs[pid] = new_cfg
+
+
 def _load_config() -> dict:
     cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     with open(cfg_path) as f:

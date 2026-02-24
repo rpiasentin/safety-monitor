@@ -20,6 +20,7 @@ import uvicorn
 import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -110,11 +111,13 @@ async def dashboard(request: Request):
                 pass
 
     # Build per-property context
+    global_temp_cfg = CONFIG.get("alerts", {}).get("temperature", {})
     cards = []
     for p in props:
         pid  = p["id"]
         row  = latest.get(pid, {})
         devs = db.get_hubitat_devices(pid)
+        pcfg = p.get("alerts", {})
 
         # Alert counts for this property
         prop_alerts = [a for a in alerts if a["property_id"] == pid]
@@ -135,6 +138,17 @@ async def dashboard(request: Request):
             "temp_status":    ts,
             "temp_color":     formatters.temp_color(ts),
             "soc_color":      formatters.soc_color(row.get("soc")),
+            # Alert threshold config (for settings panel)
+            "alerts_cfg": {
+                "indoor_temp_warning":  pcfg.get("indoor_temp_warning",
+                                            global_temp_cfg.get("threshold_fahrenheit", 40)),
+                "indoor_temp_critical": pcfg.get("indoor_temp_critical",
+                                            global_temp_cfg.get("critical_fahrenheit", 32)),
+                "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
+                "outdoor_temp_critical": pcfg.get("outdoor_temp_critical", 0),
+                "outdoor_sensors": ", ".join(pcfg.get("outdoor_sensors", [])),
+                "exclude_sensors": ", ".join(pcfg.get("exclude_sensors", [])),
+            },
         })
 
     return templates.TemplateResponse("dashboard.html", {
@@ -177,6 +191,69 @@ async def api_history(property_id: str, hours: int = 24):
 @app.get("/api/alerts")
 async def api_alerts(hours: int = 48):
     return JSONResponse(content=db.get_recent_alerts(hours))
+
+
+@app.get("/api/config/thresholds")
+async def get_thresholds():
+    """Return per-property alert threshold config."""
+    global_temp = CONFIG.get("alerts", {}).get("temperature", {})
+    result = {}
+    for p in CONFIG.get("properties", []):
+        pid  = p["id"]
+        pcfg = p.get("alerts", {})
+        result[pid] = {
+            "name":                  p.get("name", pid),
+            "indoor_temp_warning":   pcfg.get("indoor_temp_warning",
+                                         global_temp.get("threshold_fahrenheit", 40)),
+            "indoor_temp_critical":  pcfg.get("indoor_temp_critical",
+                                         global_temp.get("critical_fahrenheit", 32)),
+            "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
+            "outdoor_temp_critical": pcfg.get("outdoor_temp_critical", 0),
+            "outdoor_sensors":       pcfg.get("outdoor_sensors", []),
+            "exclude_sensors":       pcfg.get("exclude_sensors", []),
+        }
+    return JSONResponse(content=result)
+
+
+@app.post("/api/config/thresholds/{pid}")
+async def update_thresholds(pid: str, request: Request):
+    """Update per-property alert thresholds and persist to config.yaml."""
+    # Find the property
+    props = CONFIG.get("properties", [])
+    prop  = next((p for p in props if p["id"] == pid), None)
+    if not prop:
+        return JSONResponse(status_code=404, content={"error": f"Property '{pid}' not found"})
+
+    body = await request.json()
+
+    if "alerts" not in prop:
+        prop["alerts"] = {}
+    pcfg = prop["alerts"]
+
+    # Numeric thresholds
+    for key in ("indoor_temp_warning", "indoor_temp_critical",
+                "outdoor_temp_warning", "outdoor_temp_critical"):
+        if key in body and body[key] is not None:
+            pcfg[key] = float(body[key])
+
+    # Sensor lists (accept comma-separated string or list)
+    for key in ("outdoor_sensors", "exclude_sensors"):
+        if key in body:
+            val = body[key]
+            if isinstance(val, str):
+                val = [s.strip() for s in val.split(",") if s.strip()]
+            pcfg[key] = val
+
+    # Persist to config.yaml
+    cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+    with open(cfg_path, "w") as f:
+        yaml.dump(CONFIG, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    # Update scheduler in-memory state (no restart needed)
+    scheduler.update_property_alert_cfg(pid, pcfg)
+
+    logger.info("Thresholds updated for [%s]: %s", pid, pcfg)
+    return JSONResponse(content={"status": "ok", "pid": pid, "alerts": pcfg})
 
 
 @app.post("/api/collect/now")
