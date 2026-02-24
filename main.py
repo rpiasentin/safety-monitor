@@ -146,8 +146,8 @@ async def dashboard(request: Request):
                                             global_temp_cfg.get("critical_fahrenheit", 32)),
                 "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
                 "outdoor_temp_critical": pcfg.get("outdoor_temp_critical", 0),
-                "outdoor_sensors": ", ".join(pcfg.get("outdoor_sensors", [])),
-                "exclude_sensors": ", ".join(pcfg.get("exclude_sensors", [])),
+                "outdoor_sensors": pcfg.get("outdoor_sensors", []),
+                "exclude_sensors": pcfg.get("exclude_sensors", []),
             },
         })
 
@@ -254,6 +254,23 @@ async def update_thresholds(pid: str, request: Request):
 
     logger.info("Thresholds updated for [%s]: %s", pid, pcfg)
     return JSONResponse(content={"status": "ok", "pid": pid, "alerts": pcfg})
+
+
+@app.get("/api/property/{property_id}/sensors")
+async def api_sensors(property_id: str):
+    """Return sorted list of temperature sensor names known for a property."""
+    row = db.get_latest_reading(property_id, source="merged")
+    sensors = []
+    if row:
+        raw_str = row.get("raw_json")
+        if raw_str:
+            try:
+                raw = json.loads(raw_str)
+                all_temps = raw.get("all_temps") or {}
+                sensors = sorted(all_temps.keys())
+            except Exception:
+                pass
+    return JSONResponse(content={"sensors": sensors})
 
 
 @app.post("/api/collect/now")

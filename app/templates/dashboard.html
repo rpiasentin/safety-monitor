@@ -85,23 +85,17 @@
                   class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
               </label>
             </div>
-            <div class="space-y-2">
-              <label class="block">
-                <span class="text-xs text-gray-400 block mb-1">Outdoor Sensors (comma-separated)</span>
-                <input type="text"
-                  id="{{ card.id }}_outdoor_sensors"
-                  value="{{ card.alerts_cfg.outdoor_sensors }}"
-                  placeholder="e.g. Deck temperature, Coop sensor"
-                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
-              </label>
-              <label class="block">
-                <span class="text-xs text-gray-400 block mb-1">Excluded Sensors (comma-separated)</span>
-                <input type="text"
-                  id="{{ card.id }}_exclude_sensors"
-                  value="{{ card.alerts_cfg.exclude_sensors }}"
-                  placeholder="e.g. rpoffice"
-                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
-              </label>
+            <div class="mt-1">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-gray-400">Sensor Classification</span>
+                <span class="text-xs text-gray-600">Indoor · Outdoor · Skip</span>
+              </div>
+              <div id="{{ card.id }}_sensor_list"
+                data-outdoor='{{ card.alerts_cfg.outdoor_sensors | tojson }}'
+                data-exclude='{{ card.alerts_cfg.exclude_sensors | tojson }}'
+                class="space-y-0.5 max-h-52 overflow-y-auto rounded-lg bg-gray-700 border border-gray-600 p-2">
+                <p class="text-xs text-gray-500 italic py-2 text-center">Click ⚙ Thresholds to load sensors…</p>
+              </div>
             </div>
             <div id="{{ card.id }}_status" class="mt-2 text-xs hidden"></div>
           </div>
@@ -397,6 +391,48 @@
     updateClock();
     setInterval(updateClock, 1000);
 
+    // Load sensor classification table for a property
+    async function loadSensors(pid) {
+      const container = document.getElementById(`${pid}_sensor_list`);
+      if (!container) return;
+      const outdoor = JSON.parse(container.dataset.outdoor || '[]').map(s => s.toLowerCase());
+      const exclude = JSON.parse(container.dataset.exclude || '[]').map(s => s.toLowerCase());
+
+      container.innerHTML = '<p class="text-xs text-gray-500 italic py-2 text-center">Loading…</p>';
+      try {
+        const resp = await fetch(`/api/property/${pid}/sensors`);
+        const data = await resp.json();
+        const sensors = data.sensors || [];
+        if (!sensors.length) {
+          container.innerHTML = '<p class="text-xs text-gray-500 italic py-2 text-center">No sensors found yet — run a collection first</p>';
+          return;
+        }
+        // Header row
+        let html = `<div class="grid grid-cols-[1fr,44px,52px,40px] text-xs text-gray-500 px-1 pb-1 border-b border-gray-600 mb-1">
+          <span>Sensor</span>
+          <span class="text-center">🏠</span>
+          <span class="text-center">🌲</span>
+          <span class="text-center">🚫</span>
+        </div>`;
+        sensors.forEach((s, i) => {
+          const key = s.toLowerCase();
+          const isOutdoor = outdoor.includes(key);
+          const isExclude = exclude.includes(key);
+          const isIndoor  = !isOutdoor && !isExclude;
+          const rn = `${pid}_sr_${i}`;
+          html += `<div class="grid grid-cols-[1fr,44px,52px,40px] items-center px-1 py-0.5 rounded hover:bg-gray-600" data-sensor="${s.replace(/"/g,'&quot;')}">
+            <span class="text-sm text-gray-200 truncate" title="${s.replace(/"/g,'&quot;')}">${s}</span>
+            <input type="radio" class="mx-auto accent-blue-500 cursor-pointer" name="${rn}" value="indoor"  ${isIndoor  ? 'checked' : ''}>
+            <input type="radio" class="mx-auto accent-green-500 cursor-pointer" name="${rn}" value="outdoor" ${isOutdoor ? 'checked' : ''}>
+            <input type="radio" class="mx-auto accent-red-400 cursor-pointer"  name="${rn}" value="exclude" ${isExclude ? 'checked' : ''}>
+          </div>`;
+        });
+        container.innerHTML = html;
+      } catch(e) {
+        container.innerHTML = `<p class="text-xs text-red-400 py-2 text-center">Error: ${e.message}</p>`;
+      }
+    }
+
     // Settings panel toggle
     function toggleSettings() {
       const panel = document.getElementById('settings-panel');
@@ -406,6 +442,9 @@
       btn.classList.toggle('bg-gray-700', !shown);
       btn.classList.toggle('text-white',  !shown);
       if (!shown) {
+        // Load sensor lists for all properties
+        {% for card in cards %}loadSensors('{{ card.id }}');
+        {% endfor %}
         setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
       }
     }
@@ -413,14 +452,25 @@
     // Save thresholds for a property
     async function saveThresholds(pid) {
       const g = id => document.getElementById(`${pid}_${id}`)?.value?.trim() ?? '';
+
+      // Collect sensor classifications from radio buttons
+      const outdoor = [], exclude = [];
+      document.querySelectorAll(`#${pid}_sensor_list [data-sensor]`).forEach(row => {
+        const name = row.dataset.sensor;
+        const val  = row.querySelector('input[type="radio"]:checked')?.value;
+        if (val === 'outdoor') outdoor.push(name);
+        if (val === 'exclude') exclude.push(name);
+      });
+
       const payload = {
-        indoor_temp_warning:  parseFloat(g('indoor_temp_warning')),
-        indoor_temp_critical: parseFloat(g('indoor_temp_critical')),
-        outdoor_temp_warning: parseFloat(g('outdoor_temp_warning')),
-        outdoor_temp_critical:parseFloat(g('outdoor_temp_critical')),
-        outdoor_sensors:      g('outdoor_sensors'),
-        exclude_sensors:      g('exclude_sensors'),
+        indoor_temp_warning:   parseFloat(g('indoor_temp_warning')),
+        indoor_temp_critical:  parseFloat(g('indoor_temp_critical')),
+        outdoor_temp_warning:  parseFloat(g('outdoor_temp_warning')),
+        outdoor_temp_critical: parseFloat(g('outdoor_temp_critical')),
+        outdoor_sensors: outdoor,
+        exclude_sensors: exclude,
       };
+
       const statusEl = document.getElementById(`${pid}_status`);
       statusEl.classList.remove('hidden', 'text-green-400', 'text-red-400');
       statusEl.textContent = 'Saving…';
@@ -434,6 +484,12 @@
         if (resp.ok) {
           statusEl.textContent = '✓ Saved';
           statusEl.classList.replace('text-gray-400', 'text-green-400');
+          // Update data-* so re-opening shows updated state
+          const container = document.getElementById(`${pid}_sensor_list`);
+          if (container) {
+            container.dataset.outdoor = JSON.stringify(outdoor);
+            container.dataset.exclude = JSON.stringify(exclude);
+          }
         } else {
           const err = await resp.json();
           statusEl.textContent = `✗ Error: ${err.error || resp.status}`;
