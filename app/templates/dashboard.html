@@ -85,10 +85,23 @@
                   class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
               </label>
             </div>
+            <!-- Primary display sensor -->
+            <div class="mb-3">
+              <span class="text-xs text-gray-400 block mb-1">🌡 Primary Display Sensor</span>
+              <select id="{{ card.id }}_primary_sensor"
+                data-current="{{ card.alerts_cfg.primary_temp_sensor }}"
+                class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                <option value="{{ card.alerts_cfg.primary_temp_sensor }}">
+                  {{ card.alerts_cfg.primary_temp_sensor or '— open panel to load sensors —' }}
+                </option>
+              </select>
+            </div>
+
+            <!-- Sensor classification table -->
             <div class="mt-1">
               <div class="flex items-center justify-between mb-1">
                 <span class="text-xs text-gray-400">Sensor Classification</span>
-                <span class="text-xs text-gray-600">Indoor · Outdoor · Skip</span>
+                <span class="text-xs text-gray-600">🏠 Indoor · 🌲 Outdoor · 🚫 Skip</span>
               </div>
               <div id="{{ card.id }}_sensor_list"
                 data-outdoor='{{ card.alerts_cfg.outdoor_sensors | tojson }}'
@@ -407,6 +420,14 @@
           container.innerHTML = '<p class="text-xs text-gray-500 italic py-2 text-center">No sensors found yet — run a collection first</p>';
           return;
         }
+        // Populate primary sensor dropdown
+        const sel = document.getElementById(`${pid}_primary_sensor`);
+        if (sel) {
+          const cur = sel.dataset.current || '';
+          sel.innerHTML = '<option value="">— none —</option>' +
+            sensors.map(s => `<option value="${s}"${s === cur ? ' selected' : ''}>${s}</option>`).join('');
+        }
+
         // Header row
         let html = `<div class="grid grid-cols-[1fr,44px,52px,40px] text-xs text-gray-500 px-1 pb-1 border-b border-gray-600 mb-1">
           <span>Sensor</span>
@@ -462,13 +483,15 @@
         if (val === 'exclude') exclude.push(name);
       });
 
+      const primarySensor = document.getElementById(`${pid}_primary_sensor`)?.value || '';
       const payload = {
         indoor_temp_warning:   parseFloat(g('indoor_temp_warning')),
         indoor_temp_critical:  parseFloat(g('indoor_temp_critical')),
         outdoor_temp_warning:  parseFloat(g('outdoor_temp_warning')),
         outdoor_temp_critical: parseFloat(g('outdoor_temp_critical')),
-        outdoor_sensors: outdoor,
-        exclude_sensors: exclude,
+        outdoor_sensors:       outdoor,
+        exclude_sensors:       exclude,
+        primary_temp_sensor:   primarySensor,
       };
 
       const statusEl = document.getElementById(`${pid}_status`);
@@ -490,6 +513,8 @@
             container.dataset.outdoor = JSON.stringify(outdoor);
             container.dataset.exclude = JSON.stringify(exclude);
           }
+          const selEl = document.getElementById(`${pid}_primary_sensor`);
+          if (selEl) selEl.dataset.current = primarySensor;
         } else {
           const err = await resp.json();
           statusEl.textContent = `✗ Error: ${err.error || resp.status}`;

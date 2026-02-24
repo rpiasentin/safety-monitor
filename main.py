@@ -118,6 +118,12 @@ async def dashboard(request: Request):
         row  = latest.get(pid, {})
         devs = db.get_hubitat_devices(pid)
         pcfg = p.get("alerts", {})
+        # Find current primary_temp_sensor from collector configs
+        primary_sensor = next(
+            (c.get("primary_temp_sensor", "") for c in p.get("collectors", [])
+             if c.get("primary_temp_sensor")),
+            ""
+        )
 
         # Alert counts for this property
         prop_alerts = [a for a in alerts if a["property_id"] == pid]
@@ -146,8 +152,9 @@ async def dashboard(request: Request):
                                             global_temp_cfg.get("critical_fahrenheit", 32)),
                 "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
                 "outdoor_temp_critical": pcfg.get("outdoor_temp_critical", 0),
-                "outdoor_sensors": pcfg.get("outdoor_sensors", []),
-                "exclude_sensors": pcfg.get("exclude_sensors", []),
+                "outdoor_sensors":    pcfg.get("outdoor_sensors", []),
+                "exclude_sensors":    pcfg.get("exclude_sensors", []),
+                "primary_temp_sensor": primary_sensor,
             },
         })
 
@@ -244,15 +251,25 @@ async def update_thresholds(pid: str, request: Request):
                 val = [s.strip() for s in val.split(",") if s.strip()]
             pcfg[key] = val
 
+    # Primary display sensor — stored in the collector config block
+    new_primary = body.get("primary_temp_sensor", "").strip()
+    if new_primary:
+        for coll in prop.get("collectors", []):
+            if coll.get("type") in ("hubitat_cloud", "ha_api"):
+                coll["primary_temp_sensor"] = new_primary
+                break
+        # Patch the running collector immediately (no restart needed)
+        scheduler.update_primary_temp_sensor(pid, new_primary)
+
     # Persist to config.yaml
     cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     with open(cfg_path, "w") as f:
         yaml.dump(CONFIG, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
-    # Update scheduler in-memory state (no restart needed)
+    # Update scheduler in-memory alert state (no restart needed)
     scheduler.update_property_alert_cfg(pid, pcfg)
 
-    logger.info("Thresholds updated for [%s]: %s", pid, pcfg)
+    logger.info("Thresholds updated for [%s]: alerts=%s primary_sensor=%s", pid, pcfg, new_primary)
     return JSONResponse(content={"status": "ok", "pid": pid, "alerts": pcfg})
 
 

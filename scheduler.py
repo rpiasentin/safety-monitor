@@ -33,6 +33,29 @@ def update_property_alert_cfg(pid: str, new_cfg: dict) -> None:
     _property_alert_cfgs[pid] = new_cfg
 
 
+def update_primary_temp_sensor(pid: str, sensor_name: str) -> bool:
+    """
+    Patch the running collector's primary temp sensor live — no restart needed.
+    Works by finding the HubitatCloudCollector or HACollector for the property
+    and updating its temp_sensor / primary_temp_sensor attribute.
+    Returns True if a collector was found and patched.
+    """
+    for pc in _property_collectors:
+        if pc.prop_id != pid:
+            continue
+        for _ctype, collector in pc.collectors:
+            if hasattr(collector, "temp_sensor"):          # HubitatCloudCollector
+                collector.temp_sensor = sensor_name
+                logger.info("[%s] primary_temp_sensor updated live → %s", pid, sensor_name)
+                return True
+            if hasattr(collector, "primary_temp_sensor"):  # HACollector
+                collector.primary_temp_sensor = sensor_name
+                logger.info("[%s] primary_temp_sensor updated live → %s", pid, sensor_name)
+                return True
+    logger.warning("[%s] update_primary_temp_sensor: no matching collector found", pid)
+    return False
+
+
 def _load_config() -> dict:
     cfg_path = os.path.join(os.path.dirname(__file__), "config.yaml")
     with open(cfg_path) as f:
