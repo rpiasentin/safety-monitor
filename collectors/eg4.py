@@ -112,7 +112,7 @@ class EG4Client:
     def __init__(self):
         self._cache: dict = {}
         self._cache_ts: float = 0.0
-        self._cloud_token: str | None = None
+        self._session: requests.Session | None = None   # authenticated cloud session
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -258,9 +258,13 @@ class EG4Client:
         """
         Fetch live data from monitor.eg4electronics.com.
 
-        Auth flow:
-          1. POST /WManage/api/login  → token
-          2. GET  /WManage/api/device/getRealTimeData?sn=<LOGGER_SN>  → data
+        Confirmed auth flow (reverse-engineered Feb 2026):
+          1. GET  /WManage/                              → establishes JSESSIONID cookie
+          2. POST /WManage/api/login  form-encoded       → sets session auth cookie
+          3. POST /WManage/api/inverter/getInverterRuntime  serialNum=LOGGER_SN  → data
+
+        IMPORTANT: login MUST use form-encoded data (not JSON) — JSON returns HTTP 500.
+        Session cookie (JSESSIONID) must persist across all requests via requests.Session.
 
         Requires EG4_USERNAME and EG4_PASSWORD in .env.
         """
@@ -270,80 +274,103 @@ class EG4Client:
             )
             return None
 
-        token = self._cloud_login()
-        if token is None:
+        if not self._session and not self._cloud_login():
             return None
 
         try:
-            resp = requests.get(
-                f"{EG4_CLOUD_URL}/WManage/api/device/getRealTimeData",
-                params={"sn": EG4_LOGGER_SN},
-                headers={"Authorization": f"Bearer {token}"},
+            resp = self._session.post(
+                f"{EG4_CLOUD_URL}/WManage/api/inverter/getInverterRuntime",
+                data={"serialNum": EG4_LOGGER_SN},
                 timeout=TIMEOUT,
             )
             resp.raise_for_status()
             raw = resp.json()
-            logger.debug("EG4 cloud raw: %s", json.dumps(raw)[:300])
+            if not raw.get("success"):
+                logger.warning("EG4 cloud runtime: success=false — %s", raw)
+                self._session = None   # force re-login next time
+                return None
+            logger.debug(
+                "EG4 cloud runtime: soc=%s ppv=%sW pCharge=%sW peps=%sW tinner=%s°C",
+                raw.get("soc"), raw.get("ppv"),
+                raw.get("pCharge"), raw.get("peps"), raw.get("tinner"),
+            )
             return self._normalise_cloud(raw)
         except Exception as exc:
-            logger.error("EG4 cloud data fetch error: %s", exc)
-            self._cloud_token = None   # force re-login next time
+            logger.error("EG4 cloud runtime fetch error: %s", exc)
+            self._session = None   # force re-login next time
             return None
 
-    def _cloud_login(self) -> str | None:
-        """Login to EG4 cloud and return bearer token, caching it in self._cloud_token."""
-        if self._cloud_token:
-            return self._cloud_token
+    def _cloud_login(self) -> bool:
+        """
+        Establish a requests.Session, get JSESSIONID, and log in via form-encoded POST.
+        Returns True on success.  Stores session in self._session.
+        """
         try:
-            resp = requests.post(
+            s = requests.Session()
+            s.headers.update({
+                "User-Agent": "Mozilla/5.0 (compatible; SafetyMonitor/1.0)",
+                "Origin":     EG4_CLOUD_URL,
+                "Accept":     "application/json, text/plain, */*",
+            })
+            # Step 1 — establish JSESSIONID cookie
+            s.get(f"{EG4_CLOUD_URL}/WManage/", timeout=TIMEOUT)
+            # Step 2 — form-encoded login (JSON returns HTTP 500)
+            resp = s.post(
                 f"{EG4_CLOUD_URL}/WManage/api/login",
-                json={"account": EG4_USERNAME, "password": EG4_PASSWORD},
+                data={"account": EG4_USERNAME, "password": EG4_PASSWORD},
                 timeout=TIMEOUT,
             )
             resp.raise_for_status()
             body = resp.json()
-            token = (
-                body.get("token")
-                or body.get("data", {}).get("token")
-                or body.get("access_token")
-            )
-            if not token:
-                logger.error("EG4 cloud login: no token in response: %s", body)
-                return None
-            self._cloud_token = token
-            logger.debug("EG4 cloud login OK, token cached.")
-            return token
+            if not body.get("success"):
+                logger.error("EG4 cloud login failed: %s", body)
+                return False
+            self._session = s
+            logger.info("EG4 cloud login OK (userId=%s)", body.get("userId"))
+            return True
         except Exception as exc:
             logger.error("EG4 cloud login error: %s", exc)
-            return None
+            self._session = None
+            return False
 
     def _normalise_cloud(self, raw: dict) -> dict:
         """
-        Map EG4 cloud API field names → pylxpweb canonical names.
-        Cloud API uses pylxpweb-compatible names so very little mapping is needed.
+        Map EG4 getInverterRuntime response fields → canonical names.
+
+        Confirmed field names from live API response (Feb 2026):
+          ppv        → pv_total_power   (total EG4 MPPT output, W)
+          soc        → soc              (battery SOC, 0-100)
+          vBat       → voltage          (battery voltage × 0.1 → V, e.g. 540 → 54.0V)
+          pCharge    → charge_power     (battery charging power, W)
+          pDisCharge → discharge_power  (battery discharging power, W)
+          peps       → power_to_user    (EPS/backup load = house demand, W)
+          tinner     → max_cell_temp    (inverter internal temperature, °C)
         """
-        data = raw.get("data", raw)   # unwrap envelope if present
-        mapping = {
-            "soc":             ["soc", "SOC", "batSoc"],
-            "voltage":         ["voltage", "batVoltage", "vBat"],
-            "current":         ["current", "batCurrent"],
-            "charge_power":    ["charge_power", "chargePower"],
-            "discharge_power": ["discharge_power", "dischargePower"],
-            "pv_total_power":  ["pv_total_power", "pvPower", "pvTotalPower"],
-            "power_to_user":   ["power_to_user", "loadPower", "powerToUser"],
-            "power_to_grid":   ["power_to_grid", "gridPower"],
-            "max_cell_temp":   ["max_cell_temp", "batTemp", "maxCellTemp"],
-        }
         result: dict = {}
-        for canonical, variants in mapping.items():
-            for key in variants:
-                if key in data:
-                    try:
-                        val = float(data[key])
-                        if key == "vBat":
-                            val /= 10.0
-                        result[canonical] = val
-                    except (TypeError, ValueError):
-                        pass
-                    break
+
+        if (v := raw.get("soc")) is not None:
+            result["soc"] = float(v)
+
+        if (v := raw.get("vBat")) is not None:
+            result["voltage"] = float(v) / 10.0          # 540 → 54.0 V
+
+        if (v := raw.get("ppv")) is not None:
+            result["pv_total_power"] = float(v)           # W
+
+        if (v := raw.get("pCharge")) is not None:
+            result["charge_power"] = float(v)             # W
+
+        if (v := raw.get("pDisCharge")) is not None:
+            result["discharge_power"] = float(v)          # W
+
+        # House load: prefer EPS output (peps); fall back to pToUser for grid-tied mode
+        peps = raw.get("peps")
+        ptou = raw.get("pToUser")
+        load = peps if (peps is not None and peps > 0) else ptou
+        if load is not None:
+            result["power_to_user"] = float(load)
+
+        if (v := raw.get("tinner")) is not None:
+            result["max_cell_temp"] = float(v)            # °C inverter internal temp
+
         return result
