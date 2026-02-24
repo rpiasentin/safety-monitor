@@ -31,8 +31,8 @@
       <span id="clock" class="font-mono tabular-nums"></span>
       <span class="text-gray-600">auto-refresh 60s</span>
       <button onclick="toggleSettings()" id="settings-btn"
-        class="text-gray-400 hover:text-white px-2 py-1 rounded-lg hover:bg-gray-800 transition-colors text-base"
-        title="Alert threshold settings">⚙</button>
+        class="text-gray-400 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-sm font-medium border border-gray-700 hover:border-gray-500"
+        title="Alert threshold settings">⚙ Thresholds</button>
     </div>
   </header>
 
@@ -277,6 +277,78 @@
       {% endfor %}
     </div><!-- /grid -->
 
+    <!-- Settings panel (hidden by default, toggled via Thresholds button) -->
+    <div id="settings-panel" class="hidden mb-8">
+      <div class="bg-gray-900 rounded-2xl border border-blue-800 overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+          <h2 class="text-base font-bold text-white">⚙ Alert Thresholds — per property</h2>
+          <span class="text-xs text-gray-500">Changes save to config.yaml and take effect immediately</span>
+        </div>
+        <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {% for card in cards %}
+          <div class="bg-gray-800 rounded-xl p-4">
+            <div class="flex items-center justify-between mb-3">
+              <h3 class="font-semibold text-white">{{ card.name }}</h3>
+              <button onclick="saveThresholds('{{ card.id }}')"
+                class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors">
+                Save
+              </button>
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <label class="block">
+                <span class="text-xs text-gray-400 block mb-1">🏠 Indoor Warning (°F)</span>
+                <input type="number" step="1"
+                  id="{{ card.id }}_indoor_temp_warning"
+                  value="{{ card.alerts_cfg.indoor_temp_warning|int }}"
+                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+              </label>
+              <label class="block">
+                <span class="text-xs text-gray-400 block mb-1">🥶 Indoor Critical (°F)</span>
+                <input type="number" step="1"
+                  id="{{ card.id }}_indoor_temp_critical"
+                  value="{{ card.alerts_cfg.indoor_temp_critical|int }}"
+                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+              </label>
+              <label class="block">
+                <span class="text-xs text-gray-400 block mb-1">🌲 Outdoor Warning (°F)</span>
+                <input type="number" step="1"
+                  id="{{ card.id }}_outdoor_temp_warning"
+                  value="{{ card.alerts_cfg.outdoor_temp_warning|int }}"
+                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+              </label>
+              <label class="block">
+                <span class="text-xs text-gray-400 block mb-1">❄️ Outdoor Critical (°F)</span>
+                <input type="number" step="1"
+                  id="{{ card.id }}_outdoor_temp_critical"
+                  value="{{ card.alerts_cfg.outdoor_temp_critical|int }}"
+                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+              </label>
+            </div>
+            <div class="space-y-2">
+              <label class="block">
+                <span class="text-xs text-gray-400 block mb-1">Outdoor Sensors (comma-separated)</span>
+                <input type="text"
+                  id="{{ card.id }}_outdoor_sensors"
+                  value="{{ card.alerts_cfg.outdoor_sensors }}"
+                  placeholder="e.g. Deck temperature, Coop sensor"
+                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+              </label>
+              <label class="block">
+                <span class="text-xs text-gray-400 block mb-1">Excluded Sensors (comma-separated)</span>
+                <input type="text"
+                  id="{{ card.id }}_exclude_sensors"
+                  value="{{ card.alerts_cfg.exclude_sensors }}"
+                  placeholder="e.g. rpoffice"
+                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+              </label>
+            </div>
+            <div id="{{ card.id }}_status" class="mt-2 text-xs hidden"></div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
     <!-- Recent alerts -->
     {% if alerts %}
     <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
@@ -307,78 +379,6 @@
       </div>
     </div>
     {% endif %}
-
-    <!-- Settings panel (hidden by default, toggled via ⚙ button) -->
-    <div id="settings-panel" class="hidden mt-4">
-      <div class="bg-gray-900 rounded-2xl border border-gray-700 overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
-          <h2 class="text-base font-bold text-white">⚙ Alert Thresholds</h2>
-          <span class="text-xs text-gray-500">Changes take effect on next collection cycle</span>
-        </div>
-        <div class="p-5 space-y-5">
-          {% for card in cards %}
-          <div class="bg-gray-800 rounded-xl p-4">
-            <div class="flex items-center justify-between mb-3">
-              <h3 class="font-semibold text-white">{{ card.name }}</h3>
-              <button onclick="saveThresholds('{{ card.id }}')"
-                class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors">
-                Save
-              </button>
-            </div>
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-3">
-              <label class="block">
-                <span class="text-xs text-gray-400 block mb-1">Indoor Warning (°F)</span>
-                <input type="number" step="1"
-                  id="{{ card.id }}_indoor_temp_warning"
-                  value="{{ card.alerts_cfg.indoor_temp_warning|int }}"
-                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
-              </label>
-              <label class="block">
-                <span class="text-xs text-gray-400 block mb-1">Indoor Critical (°F)</span>
-                <input type="number" step="1"
-                  id="{{ card.id }}_indoor_temp_critical"
-                  value="{{ card.alerts_cfg.indoor_temp_critical|int }}"
-                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
-              </label>
-              <label class="block">
-                <span class="text-xs text-gray-400 block mb-1">Outdoor Warning (°F)</span>
-                <input type="number" step="1"
-                  id="{{ card.id }}_outdoor_temp_warning"
-                  value="{{ card.alerts_cfg.outdoor_temp_warning|int }}"
-                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
-              </label>
-              <label class="block">
-                <span class="text-xs text-gray-400 block mb-1">Outdoor Critical (°F)</span>
-                <input type="number" step="1"
-                  id="{{ card.id }}_outdoor_temp_critical"
-                  value="{{ card.alerts_cfg.outdoor_temp_critical|int }}"
-                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
-              </label>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label class="block">
-                <span class="text-xs text-gray-400 block mb-1">Outdoor Sensors (comma-separated)</span>
-                <input type="text"
-                  id="{{ card.id }}_outdoor_sensors"
-                  value="{{ card.alerts_cfg.outdoor_sensors }}"
-                  placeholder="e.g. Deck temperature, Coop sensor"
-                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
-              </label>
-              <label class="block">
-                <span class="text-xs text-gray-400 block mb-1">Excluded Sensors (comma-separated)</span>
-                <input type="text"
-                  id="{{ card.id }}_exclude_sensors"
-                  value="{{ card.alerts_cfg.exclude_sensors }}"
-                  placeholder="e.g. rpoffice"
-                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
-              </label>
-            </div>
-            <div id="{{ card.id }}_status" class="mt-2 text-xs hidden"></div>
-          </div>
-          {% endfor %}
-        </div>
-      </div>
-    </div>
 
   </main>
 
