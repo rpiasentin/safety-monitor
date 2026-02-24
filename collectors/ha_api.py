@@ -8,9 +8,18 @@ Env vars required:
 
 Config block (from config.yaml):
   type: ha_api
-  location_id: fm              # used to filter entity IDs
+  url: "http://192.168.1.115:8123"   # optional — overrides HA_URL env var
+  location_id: fm                    # used to filter entity IDs for temps/batteries
   primary_temp_sensor: "sensor.fm_main_temp"
-  include_tesla: true          # optional, only on hc
+  include_tesla: true                # optional, defaults false
+  include_temps: true                # optional, defaults true
+  include_batteries: true            # optional, defaults true
+  tesla_vehicle_prefix: "tesla"      # prefix of HA entity IDs, e.g. "my_model_y"
+
+Token resolution order (per-collector):
+  1. config block token: (not recommended — use env var instead)
+  2. HA_{PROPERTY_ID}_TOKEN env var (e.g. HA_HC_TOKEN)
+  3. HA_LONG_LIVED_TOKEN env var (global fallback)
 """
 
 import logging
@@ -100,13 +109,16 @@ class HAClient:
                     pass
         return result
 
-    def get_tesla_data(self) -> dict | None:
-        """Pull Tesla vehicle data via HA Tesla integration entities."""
+    def get_tesla_data(self, prefix: str = "tesla") -> dict | None:
+        """Pull Tesla vehicle data via HA Tesla integration entities.
+        prefix: the entity ID prefix, e.g. 'tesla' → 'sensor.tesla_battery_level'
+                or 'my_model_y' → 'sensor.my_model_y_battery_level'
+        """
         entities = {
-            "soc":     "sensor.tesla_battery_level",
-            "power":   "sensor.tesla_charging_power",
-            "range":   "sensor.tesla_range",
-            "charger": "sensor.tesla_charger_power",
+            "soc":     f"sensor.{prefix}_battery_level",
+            "power":   f"sensor.{prefix}_charging_power",
+            "range":   f"sensor.{prefix}_range",
+            "charger": f"sensor.{prefix}_charger_power",
         }
         out: dict = {}
         for key, eid in entities.items():
@@ -132,10 +144,19 @@ class HACollector(BaseCollector):
 
     def __init__(self, property_id: str, cfg: dict):
         super().__init__(property_id, cfg)
-        self.client = HAClient()
-        self.location_id   = cfg.get("location_id", property_id)
-        self.temp_sensor   = cfg.get("primary_temp_sensor")
-        self.include_tesla = cfg.get("include_tesla", False)
+        # URL: config block > env var
+        url   = cfg.get("url") or HA_URL
+        # Token: config block > per-property env > global env
+        token = (cfg.get("token")
+                 or os.getenv(f"HA_{property_id.upper()}_TOKEN")
+                 or HA_TOKEN)
+        self.client          = HAClient(url=url, token=token)
+        self.location_id     = cfg.get("location_id", property_id)
+        self.temp_sensor     = cfg.get("primary_temp_sensor")
+        self.include_tesla   = cfg.get("include_tesla", False)
+        self.include_temps   = cfg.get("include_temps", True)
+        self.include_batt    = cfg.get("include_batteries", True)
+        self.tesla_prefix    = cfg.get("tesla_vehicle_prefix", "tesla")
 
     def collect(self) -> dict | None:
         try:
@@ -143,8 +164,10 @@ class HACollector(BaseCollector):
         except Exception as exc:
             return self._fail(exc)
 
-        temps   = self.client.get_temperature_sensors(self.location_id, states)
-        devices = self.client.get_battery_devices(self.location_id, states)
+        temps   = self.client.get_temperature_sensors(self.location_id, states) \
+                  if self.include_temps else {}
+        devices = self.client.get_battery_devices(self.location_id, states) \
+                  if self.include_batt else []
 
         primary_temp = None
         if self.temp_sensor and self.temp_sensor in temps:
@@ -153,14 +176,14 @@ class HACollector(BaseCollector):
             primary_temp = next(iter(temps.values()))
 
         result = {
-            "source":        "ha_api",
-            "property_id":   self.property_id,
-            "temperatures":  temps,
-            "primary_temp":  primary_temp,
+            "source":          "ha_api",
+            "property_id":     self.property_id,
+            "temperatures":    temps,
+            "primary_temp":    primary_temp,
             "battery_devices": devices,
         }
 
         if self.include_tesla:
-            result["tesla"] = self.client.get_tesla_data()
+            result["tesla"] = self.client.get_tesla_data(prefix=self.tesla_prefix)
 
         return self._ok(result)
