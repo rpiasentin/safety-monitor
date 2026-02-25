@@ -150,4 +150,25 @@ def _rollup(sources: dict) -> dict:
     # Tesla (only from ha_api, High Country)
     out["tesla"] = ha.get("tesla")
 
+    # Tesla Energy (Powerwall/solar) fallback — fills canonical fields when
+    # no EG4/Victron present, so HC shows the same gauges as FM.
+    tesla = out["tesla"] or {}
+    if isinstance(tesla, dict) and tesla.get("solar_power_kw") is not None:
+        def _kw_to_w(kw):
+            return round(kw * 1000, 1) if kw is not None else None
+
+        if out["soc"] is None:
+            out["soc"] = tesla.get("soc_percent")
+        if out["pv_total_power"] is None:
+            out["pv_total_power"] = _kw_to_w(tesla.get("solar_power_kw"))
+        if out["load_power"] is None:
+            w = _kw_to_w(tesla.get("load_power_kw"))
+            out["load_power"]    = w
+            out["power_to_user"] = w
+        if out["battery_charging_power"] is None:
+            out["battery_charging_power"] = _kw_to_w(tesla.get("battery_power_kw"))
+        # Grid power — Powerwall-only field (negative = exporting, positive = importing)
+        out["grid_power"]  = _kw_to_w(tesla.get("site_power_kw"))
+        out["grid_online"] = tesla.get("grid_online")
+
     return out

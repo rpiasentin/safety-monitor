@@ -265,6 +265,15 @@
                 <span class="font-semibold text-blue-300">{{ fmt_power(load) }}</span>
               </div>
               {% endif %}
+              {% set grid_pwr = card.reading.get('grid_power') %}
+              {% if grid_pwr is not none %}
+              {% set grid_color = 'text-green-400' if grid_pwr < 0 else 'text-orange-300' %}
+              {% set grid_label = 'Grid Export' if grid_pwr < 0 else 'Grid Import' %}
+              <div class="flex justify-between text-sm border-t border-gray-700 pt-1.5 mt-1">
+                <span class="text-gray-400">{{ grid_label }}</span>
+                <span class="font-semibold {{ grid_color }}">{{ fmt_power(grid_pwr|abs) }}</span>
+              </div>
+              {% endif %}
             </div>
             {% endif %}
 

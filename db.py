@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS readings (
     tesla_soc       REAL,
     tesla_charging  INTEGER,
     tesla_power_kw  REAL,
+    grid_power      REAL,
     raw_json        TEXT
 );
 
@@ -85,6 +86,15 @@ def init_db(path: str = DB_PATH) -> None:
     os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA)
+        # Migrations: add columns introduced after initial schema
+        migrations = [
+            "ALTER TABLE readings ADD COLUMN grid_power REAL",
+        ]
+        for sql in migrations:
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError:
+                pass  # column already exists
     logger.info("Database ready at %s", path)
 
 
@@ -129,18 +139,23 @@ def upsert_reading(property_id: str, source: str, data: dict,
     t_chrg = int(tesla.get("charging", False))
     t_pwr  = tesla.get("charging_power_kw")
 
+    # Grid power (Powerwall/energy systems — from _rollup canonical field)
+    grid_pwr = data.get("grid_power")
+
     with get_conn(path) as conn:
         conn.execute("""
             INSERT INTO readings
               (property_id, source, collected_at,
                soc, voltage, pv_power, temperature, primary_temp,
                load_power, battery_current,
-               tesla_soc, tesla_charging, tesla_power_kw, raw_json)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               tesla_soc, tesla_charging, tesla_power_kw,
+               grid_power, raw_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (property_id, source, now,
               soc, voltage, pv, temp, p_temp,
               load, current,
-              t_soc, t_chrg, t_pwr, raw))
+              t_soc, t_chrg, t_pwr,
+              grid_pwr, raw))
 
 
 def get_latest_reading(property_id: str, source: str | None = None,
