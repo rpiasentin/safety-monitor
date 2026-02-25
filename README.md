@@ -99,8 +99,25 @@ Cooldowns prevent repeat Pushover spam: 60 min (temp), 120 min (battery/offline)
 ## Update deployed app
 
 ```bash
-cd /opt/safety-monitor/app
-git pull
-pip3 install --break-system-packages -r requirements.txt
-systemctl restart safety-monitor
+# From Proxmox host (pve-forget):
+pct exec 104 -- bash -c 'cd /opt/safety-monitor/app && git pull && systemctl restart safety-monitor'
 ```
+
+## Cowork session preflight
+
+At the start of any new Cowork session working on this repo:
+
+1. The SSH key is at `~/.ssh/safety-monitor-github` (ED25519, fingerprint `SHA256:ihzOBnX/CMQweewRVjqS8AjD/FEgwHmQp2v7nMOePXw`)
+2. SSH config at `~/.ssh/config` already routes `github.com` to that key
+3. The workspace git remote may not be set — run:
+   ```bash
+   git remote set-url origin git@github.com:rpiasentin/safety-monitor.git
+   # or if no remote:
+   git remote add origin git@github.com:rpiasentin/safety-monitor.git
+   ```
+4. Sync workspace to latest before making changes:
+   ```bash
+   git fetch origin && git reset --hard origin/main
+   ```
+5. All code changes go: **edit in workspace → commit → push → `git pull` in CT104**
+   Never write files directly to the container.
