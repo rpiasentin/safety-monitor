@@ -48,7 +48,8 @@ properties:
         include_temps: false
         include_batteries: false
         include_tesla: true
-        tesla_vehicle_prefix: "tesla"   # update if entity IDs use a different prefix
+        tesla_type: "energy"
+        tesla_vehicle_prefix: "piasentin"
 
   - id: lr
     name: "Lariat"

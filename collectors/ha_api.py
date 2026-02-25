@@ -14,7 +14,8 @@ Config block (from config.yaml):
   include_tesla: true                # optional, defaults false
   include_temps: true                # optional, defaults true
   include_batteries: true            # optional, defaults true
-  tesla_vehicle_prefix: "tesla"      # prefix of HA entity IDs, e.g. "my_model_y"
+  tesla_type: energy                 # "vehicle" (default) or "energy" (Powerwall/solar)
+  tesla_vehicle_prefix: "tesla"      # prefix of HA entity IDs, e.g. "piasentin"
 
 Token resolution order (per-collector):
   1. config block token: (not recommended — use env var instead)
@@ -109,6 +110,52 @@ class HAClient:
                     pass
         return result
 
+    def get_tesla_energy_data(self, prefix: str = "powerwall") -> dict | None:
+        """Pull Tesla Powerwall/solar data via HA Tesla Energy integration.
+        prefix: entity ID prefix, e.g. "piasentin"
+          Expects entities like:
+            sensor.{prefix}_charge            — battery SOC %
+            sensor.{prefix}_solar_power       — solar generation kW
+            sensor.{prefix}_battery_power     — battery kW (+ charging, - discharging)
+            sensor.{prefix}_site_power        — grid kW (- exporting)
+            sensor.{prefix}_load_power        — home consumption kW
+            sensor.{prefix}_backup_reserve    — backup reserve %
+            binary_sensor.{prefix}_grid_status — on = grid online
+        """
+        numeric_map = {
+            "soc":            f"sensor.{prefix}_charge",
+            "solar_power":    f"sensor.{prefix}_solar_power",
+            "battery_power":  f"sensor.{prefix}_battery_power",
+            "site_power":     f"sensor.{prefix}_site_power",
+            "load_power":     f"sensor.{prefix}_load_power",
+            "backup_reserve": f"sensor.{prefix}_backup_reserve",
+        }
+        out: dict = {}
+        for key, eid in numeric_map.items():
+            s = self.get_state(eid)
+            if s and s.get("state") not in ("unknown", "unavailable", None):
+                try:
+                    out[key] = float(s["state"])
+                except (ValueError, TypeError):
+                    pass
+        grid_s = self.get_state(f"binary_sensor.{prefix}_grid_status")
+        if grid_s and grid_s.get("state") not in ("unknown", "unavailable", None):
+            out["grid_online"] = grid_s["state"] == "on"
+        if not out:
+            return None
+        battery_power = out.get("battery_power", 0)
+        return {
+            "soc_percent":        out.get("soc"),
+            "solar_power_kw":     round(out.get("solar_power", 0), 3),
+            "battery_power_kw":   round(battery_power, 3),
+            "charging":           battery_power > 0.1,
+            "discharging":        battery_power < -0.1,
+            "site_power_kw":      round(out.get("site_power", 0), 3),
+            "load_power_kw":      round(out.get("load_power", 0), 3),
+            "backup_reserve_pct": out.get("backup_reserve"),
+            "grid_online":        out.get("grid_online", True),
+        }
+
     def get_tesla_data(self, prefix: str = "tesla") -> dict | None:
         """Pull Tesla vehicle data via HA Tesla integration entities.
         prefix: the entity ID prefix, e.g. 'tesla' → 'sensor.tesla_battery_level'
@@ -157,6 +204,7 @@ class HACollector(BaseCollector):
         self.include_temps   = cfg.get("include_temps", True)
         self.include_batt    = cfg.get("include_batteries", True)
         self.tesla_prefix    = cfg.get("tesla_vehicle_prefix", "tesla")
+        self.tesla_type      = cfg.get("tesla_type", "vehicle")  # "vehicle" or "energy"
 
     def collect(self) -> dict | None:
         try:
@@ -184,6 +232,9 @@ class HACollector(BaseCollector):
         }
 
         if self.include_tesla:
-            result["tesla"] = self.client.get_tesla_data(prefix=self.tesla_prefix)
+            if self.tesla_type == "energy":
+                result["tesla"] = self.client.get_tesla_energy_data(prefix=self.tesla_prefix)
+            else:
+                result["tesla"] = self.client.get_tesla_data(prefix=self.tesla_prefix)
 
         return self._ok(result)
