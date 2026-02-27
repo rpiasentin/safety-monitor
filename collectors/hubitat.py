@@ -121,7 +121,14 @@ class HubitatCloudClient:
                 "friendly_name": d.get("label") or d.get("name") or f"Device {d.get('id')}",
                 "device_type":   d.get("type", ""),
                 "battery_pct":   battery_pct,
-                "last_activity": self._normalize_ts(d.get("lastActivity")),
+                "last_activity": self._normalize_ts(
+                    d.get("lastActivity")
+                    or d.get("last_activity")
+                    or d.get("date")
+                    or self._attr_value(attrs, "lastActivity")
+                    or self._attr_value(attrs, "last_activity")
+                    or self._attr_value(attrs, "date")
+                ),
             })
         return result
 

@@ -111,6 +111,8 @@ def ago(iso_ts: str | None) -> str:
     from datetime import datetime, timezone
     try:
         ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
         delta = datetime.now(timezone.utc) - ts
         secs = int(delta.total_seconds())
         if secs < 90:

@@ -173,13 +173,13 @@ def get_latest_reading(property_id: str, source: str | None = None,
             row = conn.execute("""
                 SELECT * FROM readings
                 WHERE property_id=? AND source=?
-                ORDER BY collected_at DESC LIMIT 1
+                ORDER BY id DESC LIMIT 1
             """, (property_id, source)).fetchone()
         else:
             row = conn.execute("""
                 SELECT * FROM readings
                 WHERE property_id=?
-                ORDER BY collected_at DESC LIMIT 1
+                ORDER BY id DESC LIMIT 1
             """, (property_id,)).fetchone()
     return dict(row) if row else None
 
@@ -191,10 +191,10 @@ def get_latest_readings_all(path: str = DB_PATH) -> dict[str, dict]:
             SELECT r.*
             FROM readings r
             INNER JOIN (
-                SELECT property_id, MAX(collected_at) as max_time
+                SELECT property_id, MAX(id) as max_id
                 FROM readings GROUP BY property_id
             ) latest ON r.property_id=latest.property_id
-                         AND r.collected_at=latest.max_time
+                         AND r.id=latest.max_id
         """).fetchall()
     return {dict(r)["property_id"]: dict(r) for r in rows}
 
@@ -330,12 +330,12 @@ def get_latest_merged_all(path: str = DB_PATH) -> dict[str, dict]:
             SELECT r.*
             FROM readings r
             INNER JOIN (
-                SELECT property_id, MAX(collected_at) as max_time
+                SELECT property_id, MAX(id) as max_id
                 FROM readings
                 WHERE source = 'merged'
                 GROUP BY property_id
             ) latest ON r.property_id = latest.property_id
-                     AND r.collected_at = latest.max_time
+                     AND r.id = latest.max_id
                      AND r.source = 'merged'
         """).fetchall()
         result = {dict(r)["property_id"]: dict(r) for r in rows}
@@ -347,10 +347,10 @@ def get_latest_merged_all(path: str = DB_PATH) -> dict[str, dict]:
                 SELECT r.*
                 FROM readings r
                 INNER JOIN (
-                    SELECT property_id, MAX(collected_at) as max_time
+                    SELECT property_id, MAX(id) as max_id
                     FROM readings GROUP BY property_id
                 ) latest ON r.property_id = latest.property_id
-                         AND r.collected_at = latest.max_time
+                         AND r.id = latest.max_id
             """).fetchall()
             for r in fallback_rows:
                 d = dict(r)
