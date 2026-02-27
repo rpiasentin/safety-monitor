@@ -260,8 +260,8 @@ def get_hubitat_devices_activity(property_id: str,
             SELECT * FROM hubitat_devices
             WHERE property_id=?
             ORDER BY
-                CASE WHEN last_activity IS NULL THEN 0 ELSE 1 END ASC,
-                last_activity ASC
+                CASE WHEN COALESCE(last_activity, collected_at) IS NULL THEN 0 ELSE 1 END ASC,
+                COALESCE(last_activity, collected_at) ASC
         """, (property_id,)).fetchall()
     return [dict(r) for r in rows]
 

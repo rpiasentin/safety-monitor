@@ -202,10 +202,17 @@ async def device_activity(request: Request, property_id: str):
 
     devices = db.get_hubitat_devices_activity(property_id)
 
-    # Annotate each device with its activity status
+    # Annotate each device with effective activity timestamp/status.
+    # If Hubitat does not expose per-device activity time, use collected_at
+    # (last seen in API payload) so active devices are not shown as "never".
     for dev in devices:
+        effective_ts = dev.get("last_activity") or dev.get("collected_at")
+        dev["activity_display_ts"] = effective_ts
+        dev["activity_source"] = "activity" if dev.get("last_activity") else (
+            "seen" if dev.get("collected_at") else "none"
+        )
         dev["activity_status"] = formatters.activity_status(
-            dev.get("last_activity"), warn_mins, crit_mins)
+            effective_ts, warn_mins, crit_mins)
 
     # Summary counts
     counts = {"good": 0, "warning": 0, "critical": 0, "unknown": 0}

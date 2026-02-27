@@ -144,13 +144,17 @@
 
         <!-- Last activity -->
         <div class="col-span-2 flex items-center justify-end">
-          {% if dev.last_activity %}
+          {% if dev.activity_display_ts %}
             <span class="text-sm font-mono
               {% if st == 'critical' %}text-red-400
               {% elif st == 'warning' %}text-yellow-400
               {% elif st == 'good' %}text-gray-400
               {% else %}text-gray-600{% endif %}">
-              {{ ago(dev.last_activity) }}
+              {% if dev.activity_source == 'seen' %}
+                seen {{ ago(dev.activity_display_ts) }}
+              {% else %}
+                {{ ago(dev.activity_display_ts) }}
+              {% endif %}
             </span>
           {% else %}
             <span class="text-xs text-red-500 font-semibold">never</span>
