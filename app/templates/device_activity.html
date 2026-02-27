@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ prop.name }} — Device Activity · {{ config.web.title }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <meta http-equiv="refresh" content="60">
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+    .row-critical { border-left: 3px solid #ef4444; }
+    .row-warning  { border-left: 3px solid #eab308; }
+    .row-good     { border-left: 3px solid #22c55e; }
+    .row-unknown  { border-left: 3px solid #6b7280; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- Header -->
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <a href="/" class="text-gray-400 hover:text-white transition-colors text-sm flex items-center gap-1.5">
+        ← Dashboard
+      </a>
+      <span class="text-gray-700">|</span>
+      <div class="flex items-center gap-2">
+        <span class="text-xl">📟</span>
+        <h1 class="text-lg font-bold text-white tracking-tight">
+          {{ prop.name }} — Device Activity
+        </h1>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 text-sm text-gray-400">
+      <span id="clock" class="font-mono tabular-nums"></span>
+      <span class="text-gray-600">auto-refresh 60s</span>
+    </div>
+  </header>
+
+  <main class="p-6 max-w-4xl mx-auto">
+
+    <!-- Threshold + summary bar -->
+    <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+
+      <!-- Thresholds -->
+      <div class="flex items-center gap-3 text-sm">
+        <span class="text-gray-500">Thresholds:</span>
+        <span class="bg-yellow-900/60 text-yellow-300 px-2.5 py-1 rounded-full font-medium">
+          ⚠ Warning &gt; {{ warn_mins }}m
+        </span>
+        <span class="bg-red-900/60 text-red-300 px-2.5 py-1 rounded-full font-medium">
+          🔴 Critical &gt; {{ crit_mins }}m
+        </span>
+      </div>
+
+      <!-- Counts -->
+      <div class="flex items-center gap-2 text-sm">
+        {% if counts.critical > 0 %}
+        <span class="bg-red-600 text-white px-2.5 py-1 rounded-full font-semibold">
+          {{ counts.critical }} critical
+        </span>
+        {% endif %}
+        {% if counts.warning > 0 %}
+        <span class="bg-yellow-500 text-black px-2.5 py-1 rounded-full font-semibold">
+          {{ counts.warning }} warning
+        </span>
+        {% endif %}
+        {% if counts.unknown > 0 %}
+        <span class="bg-gray-700 text-gray-300 px-2.5 py-1 rounded-full">
+          {{ counts.unknown }} unknown
+        </span>
+        {% endif %}
+        <span class="bg-green-900 text-green-300 px-2.5 py-1 rounded-full">
+          {{ counts.good }} good
+        </span>
+      </div>
+    </div>
+
+    {% if devices %}
+
+    <!-- Device table -->
+    <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
+
+      <!-- Column headers -->
+      <div class="grid grid-cols-12 gap-2 px-5 py-2.5 border-b border-gray-800 text-xs uppercase tracking-wider text-gray-500 font-semibold">
+        <div class="col-span-1 text-center">Status</div>
+        <div class="col-span-4">Device</div>
+        <div class="col-span-3">Type</div>
+        <div class="col-span-2 text-center">Battery</div>
+        <div class="col-span-2 text-right">Last activity</div>
+      </div>
+
+      <!-- Device rows -->
+      {% for dev in devices %}
+      {% set st = dev.activity_status %}
+      <div class="grid grid-cols-12 gap-2 px-5 py-3 border-b border-gray-800/60 last:border-0
+                  hover:bg-gray-800/40 transition-colors row-{{ st }} pl-4">
+
+        <!-- Status dot -->
+        <div class="col-span-1 flex items-center justify-center">
+          {% if st == 'critical' %}
+            <span class="inline-block w-3 h-3 rounded-full bg-red-500 shadow shadow-red-500/50" title="Critical — silent too long"></span>
+          {% elif st == 'warning' %}
+            <span class="inline-block w-3 h-3 rounded-full bg-yellow-400 shadow shadow-yellow-400/40" title="Warning — no recent activity"></span>
+          {% elif st == 'good' %}
+            <span class="inline-block w-3 h-3 rounded-full bg-green-500" title="Good"></span>
+          {% else %}
+            <span class="inline-block w-3 h-3 rounded-full bg-gray-600" title="Unknown — never seen"></span>
+          {% endif %}
+        </div>
+
+        <!-- Name -->
+        <div class="col-span-4 flex items-center">
+          <span class="text-sm font-medium
+            {% if st == 'critical' %}text-red-300
+            {% elif st == 'warning' %}text-yellow-200
+            {% elif st == 'good' %}text-gray-100
+            {% else %}text-gray-500{% endif %}
+            truncate" title="{{ dev.friendly_name }}">
+            {{ dev.friendly_name }}
+          </span>
+        </div>
+
+        <!-- Device type -->
+        <div class="col-span-3 flex items-center">
+          <span class="text-xs text-gray-500 truncate" title="{{ dev.device_type or '' }}">
+            {{ dev.device_type or '—' }}
+          </span>
+        </div>
+
+        <!-- Battery -->
+        <div class="col-span-2 flex items-center justify-center">
+          {% if dev.battery_pct is not none %}
+            {% set bs = battery_status(dev.battery_pct) %}
+            <span class="text-sm font-semibold
+              {% if bs == 'critical' %}text-red-400
+              {% elif bs == 'low' %}text-yellow-400
+              {% else %}text-green-400{% endif %}">
+              {{ fmt_pct(dev.battery_pct) }}
+            </span>
+          {% else %}
+            <span class="text-xs text-gray-700">—</span>
+          {% endif %}
+        </div>
+
+        <!-- Last activity -->
+        <div class="col-span-2 flex items-center justify-end">
+          {% if dev.last_activity %}
+            <span class="text-sm font-mono
+              {% if st == 'critical' %}text-red-400
+              {% elif st == 'warning' %}text-yellow-400
+              {% elif st == 'good' %}text-gray-400
+              {% else %}text-gray-600{% endif %}">
+              {{ ago(dev.last_activity) }}
+            </span>
+          {% else %}
+            <span class="text-xs text-red-500 font-semibold">never</span>
+          {% endif %}
+        </div>
+
+      </div>
+      {% endfor %}
+    </div>
+
+    <p class="text-xs text-gray-600 mt-3 text-right">
+      {{ devices|length }} device{{ 's' if devices|length != 1 }} · sorted most stale first
+    </p>
+
+    {% else %}
+    <div class="flex flex-col items-center py-16 text-gray-600">
+      <span class="text-5xl mb-3">📡</span>
+      <p class="text-base">No devices recorded yet for {{ prop.name }}</p>
+      <p class="text-sm mt-1">Waiting for the next collection cycle to populate device data...</p>
+    </div>
+    {% endif %}
+
+  </main>
+
+  <script>
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('clock').textContent = now.toLocaleTimeString('en-US', {
+        hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+  </script>
+
+</body>
+</html>

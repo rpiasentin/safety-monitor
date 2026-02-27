@@ -38,6 +38,9 @@ properties:
     name: "High Country"
     subnet: "192.168.4.0/24"
     enabled: true
+    device_activity:
+      warning_minutes: 360    # 6h — more lenient for vacation property
+      critical_minutes: 4320  # 3 days
     collectors:
       - type: hubitat_cloud
         endpoint: "https://cloud.hubitat.com/api/8d4cc6c3-ce67-4421-8984-5669cb4d4696/apps/82/devices/all"
@@ -98,3 +101,9 @@ alerts:
     timeout_minutes: 30
     pushover_enabled: true
     cooldown_minutes: 120
+
+# Device activity view — thresholds for "last seen" staleness checks.
+# Per-property overrides can be placed under each property's device_activity block.
+device_activity:
+  warning_minutes: 120    # yellow: no activity for 2+ hours
+  critical_minutes: 1440  # red: no activity for 24+ hours

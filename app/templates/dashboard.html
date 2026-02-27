@@ -376,6 +376,23 @@
           </div>
           {% endif %}
 
+          <!-- Device activity link -->
+          {% set has_hubitat = namespace(found=false) %}
+          {% for c in config.properties %}
+            {% if c.id == card.id %}
+              {% for col in c.collectors %}
+                {% if col.type == 'hubitat_cloud' %}{% set has_hubitat.found = true %}{% endif %}
+              {% endfor %}
+            {% endif %}
+          {% endfor %}
+          {% if has_hubitat.found %}
+          <a href="/devices/{{ card.id }}"
+             class="flex items-center justify-between text-xs text-gray-500 hover:text-blue-400 transition-colors mt-1 pt-2 border-t border-gray-800 group">
+            <span>📟 Device activity</span>
+            <span class="group-hover:translate-x-0.5 transition-transform">→</span>
+          </a>
+          {% endif %}
+
           <!-- No data state -->
           {% if not card.reading %}
           <div class="flex flex-col items-center py-6 text-gray-600">

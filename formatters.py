@@ -75,6 +75,35 @@ def battery_color(status: str) -> str:
             "unknown": "bg-gray-400"}.get(status, "bg-gray-400")
 
 
+def activity_status(last_activity_ts: str | None,
+                    warning_minutes: int = 120,
+                    critical_minutes: int = 480) -> str:
+    """
+    Return 'good' | 'warning' | 'critical' | 'unknown' based on how long
+    ago a device last reported activity.
+
+    'unknown'  — last_activity is None / never recorded
+    'critical' — silent for >= critical_minutes
+    'warning'  — silent for >= warning_minutes
+    'good'     — active within warning_minutes
+    """
+    if not last_activity_ts:
+        return "unknown"
+    from datetime import datetime, timezone
+    try:
+        ts = datetime.fromisoformat(last_activity_ts.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_minutes = (datetime.now(timezone.utc) - ts).total_seconds() / 60
+        if age_minutes >= critical_minutes:
+            return "critical"
+        if age_minutes >= warning_minutes:
+            return "warning"
+        return "good"
+    except Exception:
+        return "unknown"
+
+
 def ago(iso_ts: str | None) -> str:
     """Human-readable 'X min ago' from an ISO UTC timestamp."""
     if not iso_ts:

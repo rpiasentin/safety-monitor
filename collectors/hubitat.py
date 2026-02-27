@@ -68,8 +68,68 @@ class HubitatCloudClient:
                     pass
         return result
 
+    @staticmethod
+    def _normalize_ts(raw_ts) -> str | None:
+        """
+        Normalize a Hubitat lastActivity timestamp to SQLite UTC format
+        (YYYY-MM-DD HH:MM:SS).  Hubitat emits formats like:
+          "2026-02-27 14:32:10+0000"
+          "2026-02-27T14:32:10.123+0000"
+          null / missing
+        """
+        if not raw_ts:
+            return None
+        from datetime import datetime, timezone
+        try:
+            s = str(raw_ts).strip()
+            # Normalize +0000 → +00:00 so fromisoformat accepts it
+            if s.endswith("+0000"):
+                s = s[:-5] + "+00:00"
+            elif s.endswith("-0000"):
+                s = s[:-5] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return str(raw_ts)
+
+    def get_all_devices_with_activity(self,
+                                       devices: list[dict] | None = None) -> list[dict]:
+        """
+        Return every device from the hub with all available fields:
+          entity_id, friendly_name, device_type, battery_pct, last_activity
+
+        battery_pct is None for non-battery devices.  All devices are included
+        so the activity view can detect dead sensors regardless of device class.
+        """
+        if devices is None:
+            devices = self.get_all_devices()
+        result = []
+        for d in devices:
+            attrs = d.get("attributes", {})
+            # Battery — may be absent for non-battery devices
+            batt_raw = self._attr_value(attrs, "battery")
+            battery_pct = None
+            if batt_raw is not None:
+                try:
+                    battery_pct = float(batt_raw)
+                except (ValueError, TypeError):
+                    pass
+            result.append({
+                "entity_id":     str(d.get("id")),
+                "friendly_name": d.get("label") or d.get("name") or f"Device {d.get('id')}",
+                "device_type":   d.get("type", ""),
+                "battery_pct":   battery_pct,
+                "last_activity": self._normalize_ts(d.get("lastActivity")),
+            })
+        return result
+
     def get_battery_devices(self, devices: list[dict] | None = None) -> list[dict]:
-        """Return list of {entity_id, friendly_name, battery_pct} for battery devices."""
+        """Return list of {entity_id, friendly_name, battery_pct} for battery devices.
+        Kept for backwards compatibility — use get_all_devices_with_activity() for
+        the full device set including activity timestamps.
+        """
         if devices is None:
             devices = self.get_all_devices()
         result = []
@@ -110,8 +170,9 @@ class HubitatCloudCollector(BaseCollector):
         except Exception as exc:
             return self._fail(exc)
 
-        temps   = self.client.get_temperature_sensors(devices)
-        batts   = self.client.get_battery_devices(devices)
+        temps      = self.client.get_temperature_sensors(devices)
+        batts      = self.client.get_battery_devices(devices)
+        all_devs   = self.client.get_all_devices_with_activity(devices)
 
         primary_temp = temps.get(self.temp_sensor) if self.temp_sensor else None
         if primary_temp is None and temps:
@@ -123,4 +184,6 @@ class HubitatCloudCollector(BaseCollector):
             "temperatures":    temps,
             "primary_temp":    primary_temp,
             "battery_devices": batts,
+            # Full device list with lastActivity — used for device activity view
+            "all_devices":     all_devs,
         })

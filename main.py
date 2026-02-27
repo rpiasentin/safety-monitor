@@ -91,16 +91,17 @@ templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "a
 
 # Register Jinja2 globals for formatting helpers
 templates.env.globals.update({
-    "fmt_temp":       formatters.fmt_temp,
-    "fmt_power":      formatters.fmt_power,
-    "fmt_voltage":    formatters.fmt_voltage,
-    "fmt_pct":        formatters.fmt_pct,
-    "temp_status":    formatters.temp_status,
-    "battery_status": formatters.battery_status,
-    "soc_color":      formatters.soc_color,
-    "temp_color":     formatters.temp_color,
-    "battery_color":  formatters.battery_color,
-    "ago":            formatters.ago,
+    "fmt_temp":         formatters.fmt_temp,
+    "fmt_power":        formatters.fmt_power,
+    "fmt_voltage":      formatters.fmt_voltage,
+    "fmt_pct":          formatters.fmt_pct,
+    "temp_status":      formatters.temp_status,
+    "battery_status":   formatters.battery_status,
+    "soc_color":        formatters.soc_color,
+    "temp_color":       formatters.temp_color,
+    "battery_color":    formatters.battery_color,
+    "ago":              formatters.ago,
+    "activity_status":  formatters.activity_status,
 })
 
 
@@ -179,6 +180,46 @@ async def dashboard(request: Request):
         "cards":   cards,
         "alerts":  alerts[:10],
         "config":  CONFIG,
+    })
+
+
+@app.get("/devices/{property_id}", response_class=HTMLResponse)
+async def device_activity(request: Request, property_id: str):
+    """Per-property device activity view — last seen timestamps for all Hubitat devices."""
+    # Find property config
+    props = CONFIG.get("properties", [])
+    prop  = next((p for p in props if p["id"] == property_id), None)
+    if not prop:
+        return HTMLResponse(f"<h1>Property '{property_id}' not found</h1>", status_code=404)
+
+    # Resolve thresholds: per-property overrides global defaults
+    global_da  = CONFIG.get("device_activity", {})
+    prop_da    = prop.get("device_activity", {})
+    warn_mins  = prop_da.get("warning_minutes",
+                              global_da.get("warning_minutes", 120))
+    crit_mins  = prop_da.get("critical_minutes",
+                              global_da.get("critical_minutes", 1440))
+
+    devices = db.get_hubitat_devices_activity(property_id)
+
+    # Annotate each device with its activity status
+    for dev in devices:
+        dev["activity_status"] = formatters.activity_status(
+            dev.get("last_activity"), warn_mins, crit_mins)
+
+    # Summary counts
+    counts = {"good": 0, "warning": 0, "critical": 0, "unknown": 0}
+    for dev in devices:
+        counts[dev["activity_status"]] = counts.get(dev["activity_status"], 0) + 1
+
+    return templates.TemplateResponse("device_activity.html", {
+        "request":       request,
+        "prop":          prop,
+        "devices":       devices,
+        "warn_mins":     warn_mins,
+        "crit_mins":     crit_mins,
+        "counts":        counts,
+        "config":        CONFIG,
     })
 
 

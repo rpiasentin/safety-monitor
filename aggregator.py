@@ -76,8 +76,10 @@ class PropertyCollector:
             # Persist individual source row
             db.upsert_reading(self.prop_id, ctype, data)
 
-            # Persist Hubitat device battery list
-            devices = data.get("battery_devices", [])
+            # Persist Hubitat device list.
+            # Prefer all_devices (includes every device + lastActivity);
+            # fall back to battery_devices for backwards compat.
+            devices = data.get("all_devices") or data.get("battery_devices", [])
             if devices:
                 db.upsert_hubitat_devices(self.prop_id, devices)
 

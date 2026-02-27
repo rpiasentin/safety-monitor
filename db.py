@@ -89,6 +89,9 @@ def init_db(path: str = DB_PATH) -> None:
         # Migrations: add columns introduced after initial schema
         migrations = [
             "ALTER TABLE readings ADD COLUMN grid_power REAL",
+            # Device activity view columns (added after initial schema)
+            "ALTER TABLE hubitat_devices ADD COLUMN last_activity TEXT",
+            "ALTER TABLE hubitat_devices ADD COLUMN device_type TEXT",
         ]
         for sql in migrations:
             try:
@@ -218,12 +221,15 @@ def upsert_hubitat_devices(property_id: str, devices: list[dict],
         for d in devices:
             conn.execute("""
                 INSERT OR REPLACE INTO hubitat_devices
-                  (property_id, entity_id, friendly_name, battery_pct, collected_at)
-                VALUES (?,?,?,?,?)
+                  (property_id, entity_id, friendly_name, battery_pct,
+                   last_activity, device_type, collected_at)
+                VALUES (?,?,?,?,?,?,?)
             """, (property_id,
                   d.get("entity_id", ""),
                   d.get("friendly_name", ""),
                   d.get("battery_pct"),
+                  d.get("last_activity"),
+                  d.get("device_type") or d.get("type", ""),
                   now))
 
 
@@ -239,6 +245,24 @@ def get_hubitat_devices(property_id: str | None = None,
             rows = conn.execute("""
                 SELECT * FROM hubitat_devices ORDER BY property_id, battery_pct ASC
             """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_hubitat_devices_activity(property_id: str,
+                                  path: str = DB_PATH) -> list[dict]:
+    """
+    Return all Hubitat devices for a property sorted for the activity view:
+    NULL last_activity first (never reported), then oldest activity first
+    (most stale at the top), most-recently-active at the bottom.
+    """
+    with get_conn(path) as conn:
+        rows = conn.execute("""
+            SELECT * FROM hubitat_devices
+            WHERE property_id=?
+            ORDER BY
+                CASE WHEN last_activity IS NULL THEN 0 ELSE 1 END ASC,
+                last_activity ASC
+        """, (property_id,)).fetchall()
     return [dict(r) for r in rows]
 
 
