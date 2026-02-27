@@ -92,6 +92,11 @@ class PropertyCollector:
         return snapshot
 
 
+def _coalesce(*vals):
+    """Return first non-None value, treating 0 / 0.0 as valid data (not falsy)."""
+    return next((v for v in vals if v is not None), None)
+
+
 def _rollup(sources: dict) -> dict:
     """
     Produce flat merged fields from all source dicts.
@@ -110,8 +115,9 @@ def _rollup(sources: dict) -> dict:
     #           Victron SmartShunt is fallback (Coulomb-counting, accurate short-term)
     # Voltage — Victron SmartShunt is primary (direct cell measurement)
     # EG4 banner is NOT used for any live value (static boot-time snapshot)
-    out["soc"]            = eg4.get("soc") or vic.get("soc")
-    out["voltage"]        = vic.get("voltage") or eg4.get("voltage")
+    # Use _coalesce (not `or`) so that a valid 0% SOC or 0V isn't skipped.
+    out["soc"]            = _coalesce(eg4.get("soc"), vic.get("soc"))
+    out["voltage"]        = _coalesce(vic.get("voltage"), eg4.get("voltage"))
     out["victron_soc"]    = vic.get("soc")          # side-by-side comparison
     out["max_cell_temp"]  = eg4.get("max_cell_temp")
 
@@ -124,9 +130,13 @@ def _rollup(sources: dict) -> dict:
     out["pv_victron_2"]   = vic.get("pv_charger_289")   # Victron MPPT charger 289
 
     # Total PV = EG4 MPPT + both Victron MPPTs
-    pv_eg4 = eg4.get("pv_total_power") or 0.0
-    pv_vic = vic.get("pv_power")        or 0.0   # system/0/Dc/Pv/Power = 288+289 combined
-    out["pv_total_power"] = (pv_eg4 + pv_vic) if (pv_eg4 or pv_vic) else None
+    # Use explicit None checks so that a legitimately-zero reading (night) isn't skipped.
+    _pv_eg4_raw = eg4.get("pv_total_power")
+    _pv_vic_raw = vic.get("pv_power")   # system/0/Dc/Pv/Power = 288+289 combined
+    if _pv_eg4_raw is not None or _pv_vic_raw is not None:
+        out["pv_total_power"] = (_pv_eg4_raw or 0.0) + (_pv_vic_raw or 0.0)
+    else:
+        out["pv_total_power"] = None
 
     # Power flows
     # battery_charging_power: net W from SmartShunt (positive = charging, negative = discharging)

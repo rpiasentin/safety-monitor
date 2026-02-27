@@ -245,16 +245,39 @@ class AlertProcessor:
         use_push = cfg.get("pushover_enabled", True)
         fired = []
 
-        if snapshot.get("errors") and not snapshot.get("sources"):
-            if _cooldown_ok(pid, "offline", None, cooldown):
-                msg = (f"📡 {snapshot.get('property_name', pid)} is OFFLINE — "
-                       f"no data collected. Errors: {'; '.join(snapshot['errors'])}")
-                alert_id = db.insert_alert(pid, "offline", msg, severity="high")
-                if use_push:
-                    ok = _send_pushover(
-                        f"Safety Monitor — {snapshot.get('property_name', pid)}", msg, priority=1)
-                    if ok:
-                        db.mark_alert_pushover_sent(alert_id)
-                fired.append({"type": "offline", "severity": "high"})
+        # Only proceed if the current collection run got no data at all
+        if not (snapshot.get("errors") and not snapshot.get("sources")):
+            return fired
+
+        # Respect timeout_minutes: don't alert until the property has been
+        # offline for at least this long (grace period for transient failures).
+        last_ok = db.get_latest_reading(pid)
+        if last_ok:
+            try:
+                last_ts = last_ok.get("collected_at", "")
+                # Handle both old ISO+offset format and new SQLite UTC format
+                last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                if not last_dt.tzinfo:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                offline_secs = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                if offline_secs < timeout * 60:
+                    logger.debug(
+                        "[%s] offline but within grace period (%.0fs / %dm)",
+                        pid, offline_secs, timeout)
+                    return fired
+            except Exception as exc:
+                logger.warning("[%s] could not parse last reading timestamp: %s", pid, exc)
+
+        if _cooldown_ok(pid, "offline", None, cooldown):
+            msg = (f"📡 {snapshot.get('property_name', pid)} is OFFLINE — "
+                   f"no data collected for >{timeout}m. "
+                   f"Errors: {'; '.join(snapshot['errors'])}")
+            alert_id = db.insert_alert(pid, "offline", msg, severity="high")
+            if use_push:
+                ok = _send_pushover(
+                    f"Safety Monitor — {snapshot.get('property_name', pid)}", msg, priority=1)
+                if ok:
+                    db.mark_alert_pushover_sent(alert_id)
+            fired.append({"type": "offline", "severity": "high"})
 
         return fired

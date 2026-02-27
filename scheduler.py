@@ -8,6 +8,7 @@ Jobs:
 
 import logging
 import os
+import threading
 from datetime import datetime
 
 import pytz
@@ -26,6 +27,7 @@ _scheduler: BackgroundScheduler | None = None
 _property_collectors: list[PropertyCollector] = []
 _alert_processor: alert_module.AlertProcessor | None = None
 _property_alert_cfgs: dict = {}   # pid → per-property alerts override dict
+_collect_lock = threading.Lock()   # prevents overlapping collection runs
 
 
 def update_property_alert_cfg(pid: str, new_cfg: dict) -> None:
@@ -63,27 +65,37 @@ def _load_config() -> dict:
 
 
 def collect_all() -> None:
-    """Poll every enabled property and run alert checks. Called by APScheduler."""
-    logger.info("=== Collection run starting at %s ===",
-                datetime.now().strftime("%H:%M:%S"))
-    for pc in _property_collectors:
-        try:
-            snapshot = pc.run()
-            pid = snapshot.get("property_id", "?")
-            soc = snapshot.get("soc")
-            temp = snapshot.get("primary_temp")
-            errs = snapshot.get("errors", [])
-            logger.info("[%s] soc=%s  temp=%s°F  errors=%d",
-                        pid,
-                        f"{soc:.1f}%" if soc else "—",
-                        f"{temp:.1f}" if temp else "—",
-                        len(errs))
-            if _alert_processor:
-                pcfg = _property_alert_cfgs.get(pid, {})
-                _alert_processor.process(snapshot, pcfg)
-        except Exception as exc:
-            logger.error("Collection run error [%s]: %s", pc.prop_id, exc)
-    logger.info("=== Collection run complete ===")
+    """Poll every enabled property and run alert checks. Called by APScheduler.
+
+    A threading lock prevents concurrent runs (e.g. when the scheduler fires
+    at the same time as a manual /api/collect/now request).
+    """
+    if not _collect_lock.acquire(blocking=False):
+        logger.warning("collect_all: previous run still in progress — skipping this trigger")
+        return
+    try:
+        logger.info("=== Collection run starting at %s ===",
+                    datetime.now().strftime("%H:%M:%S"))
+        for pc in _property_collectors:
+            try:
+                snapshot = pc.run()
+                pid = snapshot.get("property_id", "?")
+                soc = snapshot.get("soc")
+                temp = snapshot.get("primary_temp")
+                errs = snapshot.get("errors", [])
+                logger.info("[%s] soc=%s  temp=%s°F  errors=%d",
+                            pid,
+                            f"{soc:.1f}%" if soc is not None else "—",
+                            f"{temp:.1f}" if temp is not None else "—",
+                            len(errs))
+                if _alert_processor:
+                    pcfg = _property_alert_cfgs.get(pid, {})
+                    _alert_processor.process(snapshot, pcfg)
+            except Exception as exc:
+                logger.error("Collection run error [%s]: %s", pc.prop_id, exc)
+        logger.info("=== Collection run complete ===")
+    finally:
+        _collect_lock.release()
 
 
 def daily_summary() -> None:

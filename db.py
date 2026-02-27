@@ -113,7 +113,11 @@ def get_conn(path: str = DB_PATH):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    # Use SQLite-native UTC format (YYYY-MM-DD HH:MM:SS) so that
+    # datetime('now', '-N hours') comparisons in queries work correctly.
+    # isoformat() produces "+00:00" suffix which breaks lexicographic
+    # comparison against SQLite's datetime() output.
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 # ── Readings ──────────────────────────────────────────────────────────────────

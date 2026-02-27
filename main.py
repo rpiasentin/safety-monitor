@@ -18,8 +18,9 @@ from contextlib import asynccontextmanager
 
 import uvicorn
 import yaml
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -53,6 +54,21 @@ def load_config() -> dict:
 
 
 CONFIG = load_config()
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+# Set MONITOR_API_KEY env var to require an X-API-Key header on write endpoints.
+# If the env var is not set, write endpoints remain open (safe on Tailscale-only
+# deployments where no external network access exists).
+
+_API_KEY_HEADER = APIKeyHeader(name="X-API-Key", auto_error=False)
+_API_KEY = os.getenv("MONITOR_API_KEY", "")
+
+
+async def _require_write_auth(key: str = Security(_API_KEY_HEADER)) -> None:
+    """Dependency: enforce API key on mutating endpoints if MONITOR_API_KEY is set."""
+    if _API_KEY and key != _API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid or missing X-API-Key header")
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
@@ -223,7 +239,8 @@ async def get_thresholds():
 
 
 @app.post("/api/config/thresholds/{pid}")
-async def update_thresholds(pid: str, request: Request):
+async def update_thresholds(pid: str, request: Request,
+                             _auth=Depends(_require_write_auth)):
     """Update per-property alert thresholds and persist to config.yaml."""
     # Find the property
     props = CONFIG.get("properties", [])
@@ -291,7 +308,7 @@ async def api_sensors(property_id: str):
 
 
 @app.post("/api/collect/now")
-async def trigger_collection():
+async def trigger_collection(_auth=Depends(_require_write_auth)):
     """Manually trigger an immediate collection run (useful for testing)."""
     import asyncio
     loop = asyncio.get_event_loop()
