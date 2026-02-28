@@ -135,8 +135,9 @@ class AlertProcessor:
         fired = []
         all_temps: dict = dict(snapshot.get("all_temps") or {})
         primary = snapshot.get("primary_temp")
-        if primary is not None:
-            all_temps.setdefault("primary", primary)
+        if primary is not None and not all_temps:
+            # Fallback only when no named temperature sensors are present.
+            all_temps["primary"] = primary
 
         for sensor_id, temp_f in all_temps.items():
             # Skip excluded (virtual/dead) sensors
