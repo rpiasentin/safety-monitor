@@ -353,6 +353,7 @@ def get_dashboard_alerts(hours: int = 24,
         recent_rows = conn.execute("""
             SELECT * FROM alerts
             WHERE alert_type!='water'
+              AND resolved_at IS NULL
               AND triggered_at >= datetime('now', ?)
             ORDER BY id DESC
             LIMIT ?
@@ -377,6 +378,30 @@ def resolve_alert(alert_id: int, path: str = DB_PATH) -> bool:
             WHERE id=? AND resolved_at IS NULL
         """, (_now(), alert_id))
         return cur.rowcount > 0
+
+
+def resolve_alerts(property_id: str,
+                   alert_type: str | None = None,
+                   path: str = DB_PATH) -> int:
+    """Resolve all unresolved alerts for a property, optionally by category."""
+    now = _now()
+    with get_conn(path) as conn:
+        if alert_type:
+            cur = conn.execute("""
+                UPDATE alerts
+                SET resolved_at=?
+                WHERE property_id=?
+                  AND alert_type=?
+                  AND resolved_at IS NULL
+            """, (now, property_id, alert_type))
+        else:
+            cur = conn.execute("""
+                UPDATE alerts
+                SET resolved_at=?
+                WHERE property_id=?
+                  AND resolved_at IS NULL
+            """, (now, property_id))
+    return int(cur.rowcount or 0)
 
 
 def find_active_alert(property_id: str,

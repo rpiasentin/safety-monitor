@@ -483,6 +483,35 @@ async def clear_alert(alert_id: int, _auth=Depends(_require_write_auth)):
     return JSONResponse(content={"status": "cleared", "alert_id": alert_id})
 
 
+_CLEARABLE_ALERT_CATEGORIES = {"temperature", "battery", "offline", "water", "all"}
+
+
+@app.post("/api/alerts/clear/{pid}/{category}")
+async def clear_alerts_by_category(pid: str, category: str, _auth=Depends(_require_write_auth)):
+    """Clear unresolved alerts for one property and one category (or all)."""
+    category = (category or "").strip().lower()
+    if category not in _CLEARABLE_ALERT_CATEGORIES:
+        allowed = ", ".join(sorted(_CLEARABLE_ALERT_CATEGORIES))
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Invalid category '{category}'. Allowed: {allowed}"},
+        )
+
+    known_pids = {p.get("id") for p in CONFIG.get("properties", []) if p.get("id")}
+    if pid not in known_pids:
+        return JSONResponse(status_code=404, content={"error": f"Property '{pid}' not found"})
+
+    alert_type = None if category == "all" else category
+    changed = db.resolve_alerts(property_id=pid, alert_type=alert_type)
+    logger.info("Alerts cleared manually: pid=%s category=%s count=%s", pid, category, changed)
+    return JSONResponse(content={
+        "status": "cleared",
+        "property_id": pid,
+        "category": category,
+        "cleared": changed,
+    })
+
+
 @app.post("/api/collect/now")
 async def trigger_collection(_auth=Depends(_require_write_auth)):
     """Manually trigger an immediate collection run (useful for testing)."""

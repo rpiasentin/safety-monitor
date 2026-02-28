@@ -59,6 +59,32 @@
                 Save
               </button>
             </div>
+            <div class="mb-3 rounded-lg border border-gray-700 bg-gray-700/40 p-2">
+              <p class="text-xs text-gray-400 mb-2">Clear Active Alerts</p>
+              <div class="flex flex-wrap gap-2">
+                <button onclick="clearAlertsByCategory('{{ card.id }}', 'temperature')"
+                  class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">
+                  Temp
+                </button>
+                <button onclick="clearAlertsByCategory('{{ card.id }}', 'battery')"
+                  class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">
+                  Battery
+                </button>
+                <button onclick="clearAlertsByCategory('{{ card.id }}', 'offline')"
+                  class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">
+                  Offline
+                </button>
+                <button onclick="clearAlertsByCategory('{{ card.id }}', 'water')"
+                  class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">
+                  Water
+                </button>
+                <button onclick="clearAlertsByCategory('{{ card.id }}', 'all')"
+                  class="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-red-50 border border-red-600">
+                  All
+                </button>
+              </div>
+              <div id="{{ card.id }}_clear_status" class="mt-2 text-xs hidden"></div>
+            </div>
             <div class="grid grid-cols-2 gap-3 mb-3">
               <label class="block">
                 <span class="text-xs text-gray-400 block mb-1">🏠 Indoor Warning (°F)</span>
@@ -621,6 +647,47 @@
         {% for card in cards %}loadSensors('{{ card.id }}');
         {% endfor %}
         setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      }
+    }
+
+    async function clearAlertsByCategory(pid, category) {
+      const label = (category === 'all') ? 'all categories' : category;
+      if (!confirm(`Clear ${label} alerts for ${pid}?`)) return;
+
+      const statusEl = document.getElementById(`${pid}_clear_status`);
+      if (statusEl) {
+        statusEl.classList.remove('hidden', 'text-green-400', 'text-red-400');
+        statusEl.classList.add('text-gray-400');
+        statusEl.textContent = 'Clearing…';
+      }
+
+      try {
+        const resp = await fetch(`/api/alerts/clear/${pid}/${category}`, { method: 'POST' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          const msg = data.error || resp.status;
+          if (statusEl) {
+            statusEl.textContent = `✗ ${msg}`;
+            statusEl.classList.replace('text-gray-400', 'text-red-400');
+          } else {
+            alert(`Clear failed: ${msg}`);
+          }
+          return;
+        }
+
+        const n = Number(data.cleared || 0);
+        if (statusEl) {
+          statusEl.textContent = `✓ Cleared ${n} alert${n === 1 ? '' : 's'}`;
+          statusEl.classList.replace('text-gray-400', 'text-green-400');
+        }
+        window.location.reload();
+      } catch (e) {
+        if (statusEl) {
+          statusEl.textContent = `✗ ${e.message}`;
+          statusEl.classList.replace('text-gray-400', 'text-red-400');
+        } else {
+          alert(`Clear failed: ${e.message}`);
+        }
       }
     }
 
