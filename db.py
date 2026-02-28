@@ -297,13 +297,13 @@ def get_last_alert_time(property_id: str, alert_type: str,
             row = conn.execute("""
                 SELECT triggered_at FROM alerts
                 WHERE property_id=? AND alert_type=? AND sensor_id=?
-                ORDER BY triggered_at DESC LIMIT 1
+                ORDER BY id DESC LIMIT 1
             """, (property_id, alert_type, sensor_id)).fetchone()
         else:
             row = conn.execute("""
                 SELECT triggered_at FROM alerts
                 WHERE property_id=? AND alert_type=?
-                ORDER BY triggered_at DESC LIMIT 1
+                ORDER BY id DESC LIMIT 1
             """, (property_id, alert_type)).fetchone()
     return row[0] if row else None
 
@@ -313,9 +313,97 @@ def get_recent_alerts(hours: int = 48, path: str = DB_PATH) -> list[dict]:
         rows = conn.execute("""
             SELECT * FROM alerts
             WHERE triggered_at >= datetime('now', ?)
-            ORDER BY triggered_at DESC
+            ORDER BY id DESC
         """, (f"-{hours} hours",)).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_active_alerts(alert_type: str | None = None,
+                      path: str = DB_PATH) -> list[dict]:
+    with get_conn(path) as conn:
+        if alert_type:
+            rows = conn.execute("""
+                SELECT * FROM alerts
+                WHERE resolved_at IS NULL AND alert_type=?
+                ORDER BY id DESC
+            """, (alert_type,)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT * FROM alerts
+                WHERE resolved_at IS NULL
+                ORDER BY id DESC
+            """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_dashboard_alerts(hours: int = 24,
+                         recent_limit: int = 20,
+                         path: str = DB_PATH) -> list[dict]:
+    """
+    Alerts shown on the dashboard:
+      1) all unresolved water alerts (latched until manual clear)
+      2) recent non-water alerts in the time window
+    """
+    with get_conn(path) as conn:
+        water_rows = conn.execute("""
+            SELECT * FROM alerts
+            WHERE alert_type='water' AND resolved_at IS NULL
+            ORDER BY id DESC
+        """).fetchall()
+        recent_rows = conn.execute("""
+            SELECT * FROM alerts
+            WHERE alert_type!='water'
+              AND triggered_at >= datetime('now', ?)
+            ORDER BY id DESC
+            LIMIT ?
+        """, (f"-{hours} hours", int(recent_limit))).fetchall()
+
+    out = [dict(r) for r in water_rows] + [dict(r) for r in recent_rows]
+    out.sort(key=lambda r: int(r.get("id") or 0), reverse=True)
+    return out
+
+
+def get_alert(alert_id: int, path: str = DB_PATH) -> dict | None:
+    with get_conn(path) as conn:
+        row = conn.execute("SELECT * FROM alerts WHERE id=?", (alert_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def resolve_alert(alert_id: int, path: str = DB_PATH) -> bool:
+    with get_conn(path) as conn:
+        cur = conn.execute("""
+            UPDATE alerts
+            SET resolved_at=?
+            WHERE id=? AND resolved_at IS NULL
+        """, (_now(), alert_id))
+        return cur.rowcount > 0
+
+
+def find_active_alert(property_id: str,
+                      alert_type: str,
+                      sensor_id: str | None = None,
+                      path: str = DB_PATH) -> dict | None:
+    with get_conn(path) as conn:
+        if sensor_id is None:
+            row = conn.execute("""
+                SELECT * FROM alerts
+                WHERE property_id=?
+                  AND alert_type=?
+                  AND resolved_at IS NULL
+                ORDER BY id DESC
+                LIMIT 1
+            """, (property_id, alert_type)).fetchone()
+        else:
+            row = conn.execute("""
+                SELECT * FROM alerts
+                WHERE property_id=?
+                  AND alert_type=?
+                  AND sensor_id=?
+                  AND resolved_at IS NULL
+                ORDER BY id DESC
+                LIMIT 1
+            """, (property_id, alert_type, sensor_id)).fetchone()
+    return dict(row) if row else None
 
 
 def get_latest_merged_all(path: str = DB_PATH) -> dict[str, dict]:

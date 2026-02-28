@@ -156,6 +156,52 @@ class HubitatCloudClient:
                     pass
         return result
 
+    @staticmethod
+    def _normalize_water_state(raw_state) -> str | None:
+        """Map vendor-specific leak states to canonical wet/dry values."""
+        if raw_state is None:
+            return None
+        s = str(raw_state).strip().lower()
+        wet_vals = {"wet", "detected", "leak", "leaking", "open", "active", "on", "true", "1"}
+        dry_vals = {"dry", "clear", "closed", "inactive", "off", "false", "0", "normal"}
+        if s in wet_vals:
+            return "wet"
+        if s in dry_vals:
+            return "dry"
+        return s
+
+    def get_water_sensors(self, devices: list[dict] | None = None) -> list[dict]:
+        """Return leak sensor states from Hubitat attributes when present."""
+        if devices is None:
+            devices = self.get_all_devices()
+
+        out = []
+        for d in devices:
+            attrs = d.get("attributes", {})
+            raw_state = self._attr_value(attrs, "water")
+            if raw_state is None:
+                raw_state = self._attr_value(attrs, "leak")
+            if raw_state is None:
+                continue
+
+            out.append({
+                "entity_id":     str(d.get("id")),
+                "friendly_name": d.get("label") or d.get("name") or f"Device {d.get('id')}",
+                "device_type":   d.get("type", ""),
+                "state":         self._normalize_water_state(raw_state),
+                "raw_state":     str(raw_state),
+                "last_activity": self._normalize_ts(
+                    d.get("lastActivity")
+                    or d.get("last_activity")
+                    or d.get("date")
+                    or self._attr_value(attrs, "lastActivity")
+                    or self._attr_value(attrs, "last_activity")
+                    or self._attr_value(attrs, "date")
+                ),
+            })
+
+        return out
+
 
 class HubitatCloudCollector(BaseCollector):
     """Collects Hubitat cloud data for properties without local HA access."""
@@ -180,6 +226,7 @@ class HubitatCloudCollector(BaseCollector):
         temps      = self.client.get_temperature_sensors(devices)
         batts      = self.client.get_battery_devices(devices)
         all_devs   = self.client.get_all_devices_with_activity(devices)
+        waters     = self.client.get_water_sensors(devices)
 
         primary_temp = temps.get(self.temp_sensor) if self.temp_sensor else None
         if primary_temp is None and temps:
@@ -191,6 +238,7 @@ class HubitatCloudCollector(BaseCollector):
             "temperatures":    temps,
             "primary_temp":    primary_temp,
             "battery_devices": batts,
+            "water_sensors":  waters,
             # Full device list with lastActivity — used for device activity view
             "all_devices":     all_devs,
         })

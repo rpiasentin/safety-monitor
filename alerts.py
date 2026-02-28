@@ -3,6 +3,7 @@ Alert processing and Pushover notifications.
 
 Checks:
   - Battery SOC below threshold (EG4 or Hubitat devices)
+  - Water sensors reporting wet/leak state (latched critical until manual clear)
   - Collector offline (no data for > timeout_minutes)
   - Temperature below threshold (°F)
 
@@ -104,6 +105,9 @@ class AlertProcessor:
 
         if self.cfg.get("battery", {}).get("enabled", True):
             fired += self._check_batteries(pid, snapshot)
+
+        if self.cfg.get("water", {}).get("enabled", True):
+            fired += self._check_water_sensors(pid, snapshot)
 
         if self.cfg.get("offline", {}).get("enabled", True):
             fired += self._check_offline(pid, snapshot)
@@ -233,6 +237,60 @@ class AlertProcessor:
                     db.mark_alert_pushover_sent(alert_id)
             fired.append({"type": "battery", "sensor": name,
                            "value": pct, "severity": severity})
+
+        return fired
+
+    # ── Water leak sensors (latched) ──────────────────────────────────────────
+
+    def _check_water_sensors(self, pid: str, snapshot: dict) -> list[dict]:
+        cfg = self.cfg.get("water", {})
+        use_push = cfg.get("pushover_enabled", True)
+        excludes = {str(x).lower() for x in cfg.get("exclude_sensors", [])}
+        fired = []
+
+        for sensor in snapshot.get("water_sensors", []):
+            state = str(sensor.get("state") or "").strip().lower()
+            if state != "wet":
+                continue
+
+            sensor_id = str(sensor.get("entity_id") or sensor.get("friendly_name") or "")
+            name = sensor.get("friendly_name") or sensor_id or "Unknown sensor"
+            if not sensor_id:
+                continue
+            if sensor_id.lower() in excludes or name.lower() in excludes:
+                continue
+
+            # Latching behavior: once wet, remain active until user clears.
+            if db.find_active_alert(pid, "water", sensor_id=sensor_id):
+                continue
+
+            msg = (f"💧 WATER LEAK at {snapshot.get('property_name', pid)}: "
+                   f"{name} reports WET")
+            alert_id = db.insert_alert(
+                pid,
+                "water",
+                msg,
+                sensor_id=sensor_id,
+                value=1.0,
+                threshold=1.0,
+                severity="critical",
+            )
+            if use_push:
+                ok = _send_pushover(
+                    f"Safety Monitor — {snapshot.get('property_name', pid)}",
+                    msg,
+                    priority=1,
+                )
+                if ok:
+                    db.mark_alert_pushover_sent(alert_id)
+
+            fired.append({
+                "type": "water",
+                "sensor": sensor_id,
+                "severity": "critical",
+                "state": "wet",
+            })
+            logger.error("WATER ALERT [%s] %s: wet", pid, name)
 
         return fired
 

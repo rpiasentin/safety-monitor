@@ -159,6 +159,10 @@ def _rollup(sources: dict) -> dict:
     out["battery_devices"] = (ha.get("battery_devices") or []) + \
                               (hub.get("battery_devices") or [])
 
+    # Water/leak sensors (latched critical alert uses these states)
+    out["water_sensors"] = (ha.get("water_sensors") or []) + \
+                             (hub.get("water_sensors") or [])
+
     # Tesla (only from ha_api, High Country)
     out["tesla"] = ha.get("tesla")
 

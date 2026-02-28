@@ -112,7 +112,7 @@ async def dashboard(request: Request):
     """Main live dashboard — auto-refreshes every 60 s."""
     props  = CONFIG.get("properties", [])
     latest = db.get_latest_merged_all()
-    alerts = db.get_recent_alerts(hours=24)
+    alerts = db.get_dashboard_alerts(hours=24, recent_limit=20)
 
     # Merge raw_json extra fields (pv_eg4, pv_victron_1/2, battery_charging_power,
     # load_power, etc.) into each row so the template can access them directly.
@@ -178,7 +178,7 @@ async def dashboard(request: Request):
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "cards":   cards,
-        "alerts":  alerts[:10],
+        "alerts":  alerts,
         "config":  CONFIG,
     })
 
@@ -235,7 +235,7 @@ async def api_status():
     """JSON snapshot of all properties — useful for external scripts / health checks."""
     return JSONResponse(content={
         "properties": db.get_latest_readings_all(),
-        "alerts":     db.get_recent_alerts(hours=24),
+        "alerts":     db.get_dashboard_alerts(hours=24, recent_limit=50),
     })
 
 
@@ -353,6 +353,24 @@ async def api_sensors(property_id: str):
             except Exception:
                 pass
     return JSONResponse(content={"sensors": sensors})
+
+
+@app.post("/api/alerts/{alert_id}/clear")
+async def clear_alert(alert_id: int, _auth=Depends(_require_write_auth)):
+    """Manually clear a latched water alert so it disappears from the dashboard."""
+    alert = db.get_alert(alert_id)
+    if not alert:
+        return JSONResponse(status_code=404, content={"error": f"Alert {alert_id} not found"})
+    if alert.get("alert_type") != "water":
+        return JSONResponse(status_code=400, content={"error": "Only water alerts can be manually cleared"})
+
+    changed = db.resolve_alert(alert_id)
+    if not changed:
+        return JSONResponse(content={"status": "already_cleared", "alert_id": alert_id})
+
+    logger.info("Water alert cleared manually: id=%s pid=%s sensor=%s",
+                alert_id, alert.get("property_id"), alert.get("sensor_id"))
+    return JSONResponse(content={"status": "cleared", "alert_id": alert_id})
 
 
 @app.post("/api/collect/now")

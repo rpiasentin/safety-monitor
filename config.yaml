@@ -102,6 +102,11 @@ alerts:
     pushover_enabled: true
     cooldown_minutes: 120
 
+  water:
+    enabled: true
+    pushover_enabled: true
+    exclude_sensors: []
+
 # Device activity view — thresholds for "last seen" staleness checks.
 # Per-property overrides can be placed under each property's device_activity block.
 device_activity:

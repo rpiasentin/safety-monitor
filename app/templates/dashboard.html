@@ -411,17 +411,18 @@
     {% if alerts %}
     <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
       <div class="px-5 py-4 border-b border-gray-800">
-        <h2 class="text-base font-bold text-white">Recent Alerts (last 48h)</h2>
+        <h2 class="text-base font-bold text-white">Alerts (active leaks + recent)</h2>
       </div>
       <div class="divide-y divide-gray-800">
         {% for alert in alerts %}
-        <div class="px-5 py-3 flex items-start gap-3">
+        <div id="alert-row-{{ alert.id }}" class="px-5 py-3 flex items-start gap-3">
           <span class="flex-shrink-0 mt-0.5
             {% if alert.severity == 'critical' %}text-red-400
             {% else %}text-yellow-400{% endif %}">
             {% if alert.alert_type == 'temperature' %}🌡
             {% elif alert.alert_type == 'battery' %}🔋
             {% elif alert.alert_type == 'offline' %}📡
+            {% elif alert.alert_type == 'water' %}💧
             {% else %}⚠{% endif %}
           </span>
           <div class="flex-1 min-w-0">
@@ -429,9 +430,18 @@
             <p class="text-xs text-gray-500 mt-0.5">
               {{ ago(alert.triggered_at) }}
               {% if alert.pushover_sent %} · pushed{% endif %}
+              {% if alert.alert_type == 'water' and not alert.resolved_at %} · latched until cleared{% endif %}
             </p>
           </div>
-          <span class="text-xs font-mono text-gray-600 flex-shrink-0">{{ alert.property_id }}</span>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <span class="text-xs font-mono text-gray-600">{{ alert.property_id }}</span>
+            {% if alert.alert_type == 'water' and not alert.resolved_at %}
+            <button onclick="clearWaterAlert({{ alert.id }})"
+                    class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">
+              Clear
+            </button>
+            {% endif %}
+          </div>
         </div>
         {% endfor %}
       </div>
@@ -518,6 +528,23 @@
         {% for card in cards %}loadSensors('{{ card.id }}');
         {% endfor %}
         setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      }
+    }
+
+    async function clearWaterAlert(alertId) {
+      try {
+        const resp = await fetch(`/api/alerts/${alertId}/clear`, { method: 'POST' });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          alert(`Clear failed: ${err.error || resp.status}`);
+          return;
+        }
+        const row = document.getElementById(`alert-row-${alertId}`);
+        if (row) row.remove();
+        // Keep summary and card counts consistent after clear.
+        window.location.reload();
+      } catch (e) {
+        alert(`Clear failed: ${e.message}`);
       }
     }
 
