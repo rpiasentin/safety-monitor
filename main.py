@@ -14,7 +14,9 @@ Systemd service: see Safety_Monitor_Deployment_Guide.docx
 import json
 import logging
 import os
+import shutil
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import uvicorn
 import yaml
@@ -71,6 +73,142 @@ async def _require_write_auth(key: str = Security(_API_KEY_HEADER)) -> None:
         raise HTTPException(status_code=403, detail="Invalid or missing X-API-Key header")
 
 
+# ── Container health helpers ───────────────────────────────────────────────────
+
+def _status_rank(status: str) -> int:
+    return {"good": 0, "warning": 1, "critical": 2, "unknown": 3}.get(status, 3)
+
+
+def _worst_status(statuses: list[str]) -> str:
+    if not statuses:
+        return "unknown"
+    ranked = sorted(statuses, key=_status_rank, reverse=True)
+    return ranked[0]
+
+
+def _collect_container_health(config: dict) -> dict:
+    """
+    Gather container host KPIs with an emphasis on disk availability.
+
+    Config (optional):
+      system.health.disk_paths: ["/", "/opt/safety-monitor"]
+      system.health.disk_warning_free_percent: 20
+      system.health.disk_critical_free_percent: 10
+      system.health.memory_warning_free_percent: 10
+      system.health.memory_critical_free_percent: 5
+    """
+    sys_cfg = (config or {}).get("system", {}) if isinstance(config, dict) else {}
+    health_cfg = sys_cfg.get("health", {}) if isinstance(sys_cfg, dict) else {}
+
+    warn_free_disk_pct = float(health_cfg.get("disk_warning_free_percent", 20))
+    crit_free_disk_pct = float(health_cfg.get("disk_critical_free_percent", 10))
+    warn_free_mem_pct = float(health_cfg.get("memory_warning_free_percent", 10))
+    crit_free_mem_pct = float(health_cfg.get("memory_critical_free_percent", 5))
+
+    db_dir = os.path.dirname(os.path.abspath(db.DB_PATH)) if db.DB_PATH else "/"
+    raw_paths = health_cfg.get("disk_paths", ["/", db_dir])
+    if not isinstance(raw_paths, list) or not raw_paths:
+        raw_paths = ["/", db_dir]
+
+    disks = []
+    seen_devices = set()
+    for path in raw_paths:
+        try:
+            abs_path = os.path.abspath(path)
+            st = os.stat(abs_path)
+            # Avoid duplicate entries when multiple paths are on same filesystem.
+            if st.st_dev in seen_devices:
+                continue
+            seen_devices.add(st.st_dev)
+
+            usage = shutil.disk_usage(abs_path)
+            total = float(usage.total)
+            free = float(usage.free)
+            used = float(usage.used)
+            free_pct = (free / total * 100.0) if total > 0 else 0.0
+            if free_pct <= crit_free_disk_pct:
+                status = "critical"
+            elif free_pct <= warn_free_disk_pct:
+                status = "warning"
+            else:
+                status = "good"
+            disks.append({
+                "path": abs_path,
+                "status": status,
+                "free_pct": round(free_pct, 1),
+                "used_pct": round(100.0 - free_pct, 1),
+                "free_gb": round(free / (1024 ** 3), 2),
+                "used_gb": round(used / (1024 ** 3), 2),
+                "total_gb": round(total / (1024 ** 3), 2),
+            })
+        except Exception as e:
+            disks.append({
+                "path": str(path),
+                "status": "unknown",
+                "error": str(e),
+            })
+
+    mem = {
+        "status": "unknown",
+        "free_pct": None,
+        "free_gb": None,
+        "used_gb": None,
+        "total_gb": None,
+    }
+    try:
+        meminfo = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                k, v = line.split(":", 1)
+                meminfo[k.strip()] = v.strip()
+        total_kb = float(meminfo.get("MemTotal", "0 kB").split()[0])
+        avail_kb = float(meminfo.get("MemAvailable", "0 kB").split()[0])
+        used_kb = max(total_kb - avail_kb, 0.0)
+        free_pct = (avail_kb / total_kb * 100.0) if total_kb > 0 else 0.0
+        if free_pct <= crit_free_mem_pct:
+            mem_status = "critical"
+        elif free_pct <= warn_free_mem_pct:
+            mem_status = "warning"
+        else:
+            mem_status = "good"
+        mem = {
+            "status": mem_status,
+            "free_pct": round(free_pct, 1),
+            "free_gb": round(avail_kb / (1024 ** 2), 2),
+            "used_gb": round(used_kb / (1024 ** 2), 2),
+            "total_gb": round(total_kb / (1024 ** 2), 2),
+        }
+    except Exception as e:
+        mem["error"] = str(e)
+
+    uptime_seconds = None
+    try:
+        with open("/proc/uptime") as f:
+            uptime_seconds = int(float(f.read().split()[0]))
+    except Exception:
+        pass
+
+    load_1m = None
+    try:
+        load_1m = round(os.getloadavg()[0], 2)
+    except Exception:
+        pass
+
+    overall_status = _worst_status(
+        [d.get("status", "unknown") for d in disks] + [mem.get("status", "unknown")]
+    )
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "overall_status": overall_status,
+        "disk_warning_free_percent": warn_free_disk_pct,
+        "disk_critical_free_percent": crit_free_disk_pct,
+        "disks": disks,
+        "memory": mem,
+        "uptime_seconds": uptime_seconds,
+        "load_1m": load_1m,
+    }
+
+
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -113,6 +251,7 @@ async def dashboard(request: Request):
     props  = CONFIG.get("properties", [])
     latest = db.get_latest_merged_all()
     alerts = db.get_dashboard_alerts(hours=24, recent_limit=20)
+    container_health = _collect_container_health(CONFIG)
 
     # Merge raw_json extra fields (pv_eg4, pv_victron_1/2, battery_charging_power,
     # load_power, etc.) into each row so the template can access them directly.
@@ -223,6 +362,7 @@ async def dashboard(request: Request):
         "request": request,
         "cards":   cards,
         "alerts":  alerts,
+        "container_health": container_health,
         "config":  CONFIG,
     })
 
@@ -306,6 +446,12 @@ async def api_history(property_id: str, hours: int = 24):
 @app.get("/api/alerts")
 async def api_alerts(hours: int = 48):
     return JSONResponse(content=db.get_recent_alerts(hours))
+
+
+@app.get("/api/system/health")
+async def api_system_health():
+    """Container health KPIs with disk, memory, load, and uptime snapshots."""
+    return JSONResponse(content=_collect_container_health(CONFIG))
 
 
 @app.get("/api/config/thresholds")
