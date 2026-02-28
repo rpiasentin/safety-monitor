@@ -104,13 +104,13 @@ class AlertProcessor:
             fired += self._check_temps(pid, snapshot, pcfg)
 
         if self.cfg.get("battery", {}).get("enabled", True):
-            fired += self._check_batteries(pid, snapshot)
+            fired += self._check_batteries(pid, snapshot, pcfg)
 
         if self.cfg.get("water", {}).get("enabled", True):
-            fired += self._check_water_sensors(pid, snapshot)
+            fired += self._check_water_sensors(pid, snapshot, pcfg)
 
         if self.cfg.get("offline", {}).get("enabled", True):
-            fired += self._check_offline(pid, snapshot)
+            fired += self._check_offline(pid, snapshot, pcfg)
 
         return fired
 
@@ -185,13 +185,19 @@ class AlertProcessor:
 
     # ── Battery devices ───────────────────────────────────────────────────────
 
-    def _check_batteries(self, pid: str, snapshot: dict) -> list[dict]:
+    def _check_batteries(self, pid: str, snapshot: dict, property_cfg: dict) -> list[dict]:
         cfg = self.cfg.get("battery", {})
-        low_threshold  = cfg.get("low_threshold_percent", 20)
-        crit_threshold = cfg.get("critical_threshold_percent", 10)
-        cooldown       = cfg.get("cooldown_minutes", 120)
-        use_push       = cfg.get("pushover_enabled", True)
-        excludes       = [str(x).lower() for x in cfg.get("exclude_devices", [])]
+        low_threshold  = property_cfg.get("battery_low_threshold_percent",
+                                          cfg.get("low_threshold_percent", 20))
+        crit_threshold = property_cfg.get("battery_critical_threshold_percent",
+                                          cfg.get("critical_threshold_percent", 10))
+        cooldown       = property_cfg.get("battery_cooldown_minutes",
+                                          cfg.get("cooldown_minutes", 120))
+        use_push       = property_cfg.get("battery_pushover_enabled",
+                                          cfg.get("pushover_enabled", True))
+        excludes_src   = property_cfg.get("battery_exclude_devices",
+                                          cfg.get("exclude_devices", []))
+        excludes       = [str(x).lower() for x in (excludes_src or [])]
         fired = []
 
         # Check inverter SOC first
@@ -243,10 +249,14 @@ class AlertProcessor:
 
     # ── Water leak sensors (latched) ──────────────────────────────────────────
 
-    def _check_water_sensors(self, pid: str, snapshot: dict) -> list[dict]:
+    def _check_water_sensors(self, pid: str, snapshot: dict,
+                              property_cfg: dict) -> list[dict]:
         cfg = self.cfg.get("water", {})
-        use_push = cfg.get("pushover_enabled", True)
-        excludes = {str(x).lower() for x in cfg.get("exclude_sensors", [])}
+        use_push = property_cfg.get("water_pushover_enabled",
+                                    cfg.get("pushover_enabled", True))
+        excludes_src = property_cfg.get("water_exclude_sensors",
+                                        cfg.get("exclude_sensors", []))
+        excludes = {str(x).lower() for x in (excludes_src or [])}
         fired = []
 
         for sensor in snapshot.get("water_sensors", []):
@@ -297,11 +307,14 @@ class AlertProcessor:
 
     # ── Offline ───────────────────────────────────────────────────────────────
 
-    def _check_offline(self, pid: str, snapshot: dict) -> list[dict]:
+    def _check_offline(self, pid: str, snapshot: dict, property_cfg: dict) -> list[dict]:
         cfg      = self.cfg.get("offline", {})
-        timeout  = cfg.get("timeout_minutes", 30)
-        cooldown = cfg.get("cooldown_minutes", 120)
-        use_push = cfg.get("pushover_enabled", True)
+        timeout  = property_cfg.get("offline_timeout_minutes",
+                                    cfg.get("timeout_minutes", 30))
+        cooldown = property_cfg.get("offline_cooldown_minutes",
+                                    cfg.get("cooldown_minutes", 120))
+        use_push = property_cfg.get("offline_pushover_enabled",
+                                    cfg.get("pushover_enabled", True))
         fired = []
 
         # Only proceed if the current collection run got no data at all

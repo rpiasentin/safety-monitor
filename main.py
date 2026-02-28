@@ -128,7 +128,11 @@ async def dashboard(request: Request):
                 pass
 
     # Build per-property context
-    global_temp_cfg = CONFIG.get("alerts", {}).get("temperature", {})
+    global_alerts_cfg = CONFIG.get("alerts", {})
+    global_temp_cfg = global_alerts_cfg.get("temperature", {})
+    global_battery_cfg = global_alerts_cfg.get("battery", {})
+    global_offline_cfg = global_alerts_cfg.get("offline", {})
+    global_water_cfg = global_alerts_cfg.get("water", {})
     cards = []
     for p in props:
         pid  = p["id"]
@@ -172,6 +176,46 @@ async def dashboard(request: Request):
                 "outdoor_sensors":    pcfg.get("outdoor_sensors", []),
                 "exclude_sensors":    pcfg.get("exclude_sensors", []),
                 "primary_temp_sensor": primary_sensor,
+                "battery_low_threshold_percent": pcfg.get(
+                    "battery_low_threshold_percent",
+                    global_battery_cfg.get("low_threshold_percent", 20),
+                ),
+                "battery_critical_threshold_percent": pcfg.get(
+                    "battery_critical_threshold_percent",
+                    global_battery_cfg.get("critical_threshold_percent", 10),
+                ),
+                "battery_cooldown_minutes": pcfg.get(
+                    "battery_cooldown_minutes",
+                    global_battery_cfg.get("cooldown_minutes", 120),
+                ),
+                "battery_pushover_enabled": pcfg.get(
+                    "battery_pushover_enabled",
+                    global_battery_cfg.get("pushover_enabled", True),
+                ),
+                "battery_exclude_devices": pcfg.get(
+                    "battery_exclude_devices",
+                    global_battery_cfg.get("exclude_devices", []),
+                ),
+                "offline_timeout_minutes": pcfg.get(
+                    "offline_timeout_minutes",
+                    global_offline_cfg.get("timeout_minutes", 30),
+                ),
+                "offline_cooldown_minutes": pcfg.get(
+                    "offline_cooldown_minutes",
+                    global_offline_cfg.get("cooldown_minutes", 120),
+                ),
+                "offline_pushover_enabled": pcfg.get(
+                    "offline_pushover_enabled",
+                    global_offline_cfg.get("pushover_enabled", True),
+                ),
+                "water_pushover_enabled": pcfg.get(
+                    "water_pushover_enabled",
+                    global_water_cfg.get("pushover_enabled", True),
+                ),
+                "water_exclude_sensors": pcfg.get(
+                    "water_exclude_sensors",
+                    global_water_cfg.get("exclude_sensors", []),
+                ),
             },
         })
 
@@ -267,7 +311,11 @@ async def api_alerts(hours: int = 48):
 @app.get("/api/config/thresholds")
 async def get_thresholds():
     """Return per-property alert threshold config."""
-    global_temp = CONFIG.get("alerts", {}).get("temperature", {})
+    global_alerts = CONFIG.get("alerts", {})
+    global_temp = global_alerts.get("temperature", {})
+    global_battery = global_alerts.get("battery", {})
+    global_offline = global_alerts.get("offline", {})
+    global_water = global_alerts.get("water", {})
     result = {}
     for p in CONFIG.get("properties", []):
         pid  = p["id"]
@@ -282,6 +330,46 @@ async def get_thresholds():
             "outdoor_temp_critical": pcfg.get("outdoor_temp_critical", 0),
             "outdoor_sensors":       pcfg.get("outdoor_sensors", []),
             "exclude_sensors":       pcfg.get("exclude_sensors", []),
+            "battery_low_threshold_percent": pcfg.get(
+                "battery_low_threshold_percent",
+                global_battery.get("low_threshold_percent", 20),
+            ),
+            "battery_critical_threshold_percent": pcfg.get(
+                "battery_critical_threshold_percent",
+                global_battery.get("critical_threshold_percent", 10),
+            ),
+            "battery_cooldown_minutes": pcfg.get(
+                "battery_cooldown_minutes",
+                global_battery.get("cooldown_minutes", 120),
+            ),
+            "battery_pushover_enabled": pcfg.get(
+                "battery_pushover_enabled",
+                global_battery.get("pushover_enabled", True),
+            ),
+            "battery_exclude_devices": pcfg.get(
+                "battery_exclude_devices",
+                global_battery.get("exclude_devices", []),
+            ),
+            "offline_timeout_minutes": pcfg.get(
+                "offline_timeout_minutes",
+                global_offline.get("timeout_minutes", 30),
+            ),
+            "offline_cooldown_minutes": pcfg.get(
+                "offline_cooldown_minutes",
+                global_offline.get("cooldown_minutes", 120),
+            ),
+            "offline_pushover_enabled": pcfg.get(
+                "offline_pushover_enabled",
+                global_offline.get("pushover_enabled", True),
+            ),
+            "water_pushover_enabled": pcfg.get(
+                "water_pushover_enabled",
+                global_water.get("pushover_enabled", True),
+            ),
+            "water_exclude_sensors": pcfg.get(
+                "water_exclude_sensors",
+                global_water.get("exclude_sensors", []),
+            ),
         }
     return JSONResponse(content=result)
 
@@ -290,6 +378,15 @@ async def get_thresholds():
 async def update_thresholds(pid: str, request: Request,
                              _auth=Depends(_require_write_auth)):
     """Update per-property alert thresholds and persist to config.yaml."""
+    def _as_bool(val):
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return bool(val)
+        if isinstance(val, str):
+            return val.strip().lower() in {"1", "true", "yes", "on"}
+        return False
+
     # Find the property
     props = CONFIG.get("properties", [])
     prop  = next((p for p in props if p["id"] == pid), None)
@@ -304,17 +401,30 @@ async def update_thresholds(pid: str, request: Request,
 
     # Numeric thresholds
     for key in ("indoor_temp_warning", "indoor_temp_critical",
-                "outdoor_temp_warning", "outdoor_temp_critical"):
+                "outdoor_temp_warning", "outdoor_temp_critical",
+                "battery_low_threshold_percent",
+                "battery_critical_threshold_percent",
+                "battery_cooldown_minutes",
+                "offline_timeout_minutes",
+                "offline_cooldown_minutes"):
         if key in body and body[key] is not None:
             pcfg[key] = float(body[key])
 
     # Sensor lists (accept comma-separated string or list)
-    for key in ("outdoor_sensors", "exclude_sensors"):
+    for key in ("outdoor_sensors", "exclude_sensors",
+                "battery_exclude_devices", "water_exclude_sensors"):
         if key in body:
             val = body[key]
             if isinstance(val, str):
                 val = [s.strip() for s in val.split(",") if s.strip()]
             pcfg[key] = val
+
+    # Per-alert push toggles
+    for key in ("battery_pushover_enabled",
+                "offline_pushover_enabled",
+                "water_pushover_enabled"):
+        if key in body and body[key] is not None:
+            pcfg[key] = _as_bool(body[key])
 
     # Primary display sensor — stored in the collector config block
     new_primary = body.get("primary_temp_sensor", "").strip()

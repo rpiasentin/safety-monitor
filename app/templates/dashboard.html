@@ -32,18 +32,22 @@
       <span class="text-gray-600">auto-refresh 60s</span>
       <button onclick="toggleSettings()" id="settings-btn"
         class="text-gray-400 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-sm font-medium border border-gray-700 hover:border-gray-500"
-        title="Alert threshold settings">⚙ Thresholds</button>
+        title="Alert rule settings">⚙ Alert Rules</button>
     </div>
   </header>
 
   <main class="p-6 max-w-7xl mx-auto">
 
-    <!-- Settings panel (hidden by default, toggled via Thresholds button in header) -->
+    <!-- Settings panel (hidden by default, toggled via Alert Rules button in header) -->
     <div id="settings-panel" class="hidden mb-8">
       <div class="bg-gray-900 rounded-2xl border border-blue-800 overflow-hidden">
         <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
-          <h2 class="text-base font-bold text-white">⚙ Alert Thresholds — per property</h2>
+          <h2 class="text-base font-bold text-white">⚙ Alert Rules — per property</h2>
           <button onclick="toggleSettings()" class="text-gray-500 hover:text-white text-sm">✕ Close</button>
+        </div>
+        <div class="px-5 py-3 border-b border-gray-800 text-xs text-gray-400">
+          This panel controls the live rules used by dashboard badges and Pushover alerts:
+          temperature, battery, offline, and water leak handling.
         </div>
         <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
           {% for card in cards %}
@@ -107,7 +111,96 @@
                 data-outdoor='{{ card.alerts_cfg.outdoor_sensors | tojson }}'
                 data-exclude='{{ card.alerts_cfg.exclude_sensors | tojson }}'
                 class="space-y-0.5 max-h-52 overflow-y-auto rounded-lg bg-gray-700 border border-gray-600 p-2">
-                <p class="text-xs text-gray-500 italic py-2 text-center">Click ⚙ Thresholds to load sensors…</p>
+                <p class="text-xs text-gray-500 italic py-2 text-center">Click ⚙ Alert Rules to load sensors…</p>
+              </div>
+            </div>
+            <div class="mt-3 pt-3 border-t border-gray-700 space-y-3">
+              <div>
+                <p class="text-xs text-gray-400 mb-2">🔋 Battery Alerts</p>
+                <div class="grid grid-cols-2 gap-3">
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Warning %</span>
+                    <input type="number" step="1"
+                      id="{{ card.id }}_battery_low_threshold_percent"
+                      value="{{ card.alerts_cfg.battery_low_threshold_percent|int }}"
+                      class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Critical %</span>
+                    <input type="number" step="1"
+                      id="{{ card.id }}_battery_critical_threshold_percent"
+                      value="{{ card.alerts_cfg.battery_critical_threshold_percent|int }}"
+                      class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Cooldown (min)</span>
+                    <input type="number" step="1"
+                      id="{{ card.id }}_battery_cooldown_minutes"
+                      value="{{ card.alerts_cfg.battery_cooldown_minutes|int }}"
+                      class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                  <label class="flex items-end pb-1 gap-2">
+                    <input type="checkbox"
+                      id="{{ card.id }}_battery_pushover_enabled"
+                      {% if card.alerts_cfg.battery_pushover_enabled %}checked{% endif %}
+                      class="accent-blue-500">
+                    <span class="text-xs text-gray-400">Send Pushover</span>
+                  </label>
+                </div>
+                <label class="block mt-2">
+                  <span class="text-xs text-gray-500 block mb-1">Exclude devices (comma-separated)</span>
+                  <input type="text"
+                    id="{{ card.id }}_battery_exclude_devices"
+                    value="{{ card.alerts_cfg.battery_exclude_devices|join(', ') }}"
+                    class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                </label>
+              </div>
+
+              <div class="pt-3 border-t border-gray-700">
+                <p class="text-xs text-gray-400 mb-2">📡 Offline Alerts</p>
+                <div class="grid grid-cols-2 gap-3">
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Timeout (min)</span>
+                    <input type="number" step="1"
+                      id="{{ card.id }}_offline_timeout_minutes"
+                      value="{{ card.alerts_cfg.offline_timeout_minutes|int }}"
+                      class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Cooldown (min)</span>
+                    <input type="number" step="1"
+                      id="{{ card.id }}_offline_cooldown_minutes"
+                      value="{{ card.alerts_cfg.offline_cooldown_minutes|int }}"
+                      class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                  <label class="flex items-end pb-1 gap-2 col-span-2">
+                    <input type="checkbox"
+                      id="{{ card.id }}_offline_pushover_enabled"
+                      {% if card.alerts_cfg.offline_pushover_enabled %}checked{% endif %}
+                      class="accent-blue-500">
+                    <span class="text-xs text-gray-400">Send Pushover</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="pt-3 border-t border-gray-700">
+                <p class="text-xs text-gray-400 mb-2">💧 Water Alerts</p>
+                <div class="grid grid-cols-1 gap-3">
+                  <label class="flex items-center gap-2">
+                    <input type="checkbox"
+                      id="{{ card.id }}_water_pushover_enabled"
+                      {% if card.alerts_cfg.water_pushover_enabled %}checked{% endif %}
+                      class="accent-blue-500">
+                    <span class="text-xs text-gray-400">Send Pushover</span>
+                  </label>
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Exclude water sensors (comma-separated)</span>
+                    <input type="text"
+                      id="{{ card.id }}_water_exclude_sensors"
+                      value="{{ card.alerts_cfg.water_exclude_sensors|join(', ') }}"
+                      class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                </div>
               </div>
             </div>
             <div id="{{ card.id }}_status" class="mt-2 text-xs hidden"></div>
@@ -551,6 +644,8 @@
     // Save thresholds for a property
     async function saveThresholds(pid) {
       const g = id => document.getElementById(`${pid}_${id}`)?.value?.trim() ?? '';
+      const cb = id => !!document.getElementById(`${pid}_${id}`)?.checked;
+      const csv = id => g(id).split(',').map(s => s.trim()).filter(Boolean);
 
       // Collect sensor classifications from radio buttons
       const outdoor = [], exclude = [];
@@ -570,6 +665,16 @@
         outdoor_sensors:       outdoor,
         exclude_sensors:       exclude,
         primary_temp_sensor:   primarySensor,
+        battery_low_threshold_percent:      parseFloat(g('battery_low_threshold_percent')),
+        battery_critical_threshold_percent: parseFloat(g('battery_critical_threshold_percent')),
+        battery_cooldown_minutes:           parseFloat(g('battery_cooldown_minutes')),
+        battery_pushover_enabled:           cb('battery_pushover_enabled'),
+        battery_exclude_devices:            csv('battery_exclude_devices'),
+        offline_timeout_minutes:            parseFloat(g('offline_timeout_minutes')),
+        offline_cooldown_minutes:           parseFloat(g('offline_cooldown_minutes')),
+        offline_pushover_enabled:           cb('offline_pushover_enabled'),
+        water_pushover_enabled:             cb('water_pushover_enabled'),
+        water_exclude_sensors:              csv('water_exclude_sensors'),
       };
 
       const statusEl = document.getElementById(`${pid}_status`);
