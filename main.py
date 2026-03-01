@@ -15,6 +15,9 @@ import json
 import logging
 import os
 import shutil
+import subprocess
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -84,6 +87,26 @@ def _worst_status(statuses: list[str]) -> str:
         return "unknown"
     ranked = sorted(statuses, key=_status_rank, reverse=True)
     return ranked[0]
+
+
+def _reboot_command() -> list[str] | None:
+    """Return a usable reboot command for this host, or None if unavailable."""
+    candidates = [
+        ["/usr/sbin/reboot"],
+        ["/sbin/reboot"],
+        ["reboot"],
+        ["systemctl", "reboot"],
+    ]
+    for cmd in candidates:
+        exe = cmd[0]
+        if exe.startswith("/"):
+            if os.path.exists(exe):
+                return cmd
+        else:
+            found = shutil.which(exe)
+            if found:
+                return [found] + cmd[1:]
+    return None
 
 
 def _collect_container_health(config: dict) -> dict:
@@ -197,6 +220,8 @@ def _collect_container_health(config: dict) -> dict:
     overall_status = _worst_status(
         [d.get("status", "unknown") for d in disks] + [mem.get("status", "unknown")]
     )
+    reboot_cmd = _reboot_command()
+    can_reboot = bool(reboot_cmd and os.geteuid() == 0)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "overall_status": overall_status,
@@ -206,6 +231,7 @@ def _collect_container_health(config: dict) -> dict:
         "memory": mem,
         "uptime_seconds": uptime_seconds,
         "load_1m": load_1m,
+        "can_reboot": can_reboot,
     }
 
 
@@ -454,6 +480,32 @@ async def api_system_health():
     return JSONResponse(content=_collect_container_health(CONFIG))
 
 
+@app.post("/api/system/reboot")
+async def api_system_reboot(_auth=Depends(_require_write_auth)):
+    """
+    Schedule a host/container reboot shortly after responding.
+    This keeps the UI call deterministic before connectivity drops.
+    """
+    cmd = _reboot_command()
+    if not cmd:
+        return JSONResponse(status_code=500, content={"error": "No reboot command available on host"})
+    if os.geteuid() != 0:
+        return JSONResponse(status_code=500, content={"error": "Process is not running as root"})
+
+    delay_seconds = 2
+
+    def _reboot_later():
+        time.sleep(delay_seconds)
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            logger.exception("Container reboot command failed: %s", cmd)
+
+    threading.Thread(target=_reboot_later, daemon=True).start()
+    logger.warning("Container reboot requested via API, executing in %ss", delay_seconds)
+    return JSONResponse(content={"status": "reboot_scheduled", "delay_seconds": delay_seconds})
+
+
 @app.get("/api/config/thresholds")
 async def get_thresholds():
     """Return per-property alert threshold config."""
@@ -524,6 +576,8 @@ async def get_thresholds():
 async def update_thresholds(pid: str, request: Request,
                              _auth=Depends(_require_write_auth)):
     """Update per-property alert thresholds and persist to config.yaml."""
+    import asyncio
+
     def _as_bool(val):
         if isinstance(val, bool):
             return val
@@ -572,11 +626,16 @@ async def update_thresholds(pid: str, request: Request,
         if key in body and body[key] is not None:
             pcfg[key] = _as_bool(body[key])
 
-    # Primary display sensor — stored in the collector config block
+    # Primary display sensor — stored in the collector config block.
+    # If changed, trigger an immediate background collection so the
+    # dashboard reflects the new sensor without waiting for the interval.
+    primary_changed = False
     new_primary = body.get("primary_temp_sensor", "").strip()
     if new_primary:
         for coll in prop.get("collectors", []):
             if coll.get("type") in ("hubitat_cloud", "ha_api"):
+                old_primary = str(coll.get("primary_temp_sensor", "")).strip()
+                primary_changed = (old_primary != new_primary)
                 coll["primary_temp_sensor"] = new_primary
                 break
         # Patch the running collector immediately (no restart needed)
@@ -589,6 +648,9 @@ async def update_thresholds(pid: str, request: Request,
 
     # Update scheduler in-memory alert state (no restart needed)
     scheduler.update_property_alert_cfg(pid, pcfg)
+    if primary_changed:
+        asyncio.get_running_loop().run_in_executor(None, scheduler.collect_all)
+        logger.info("[%s] primary sensor changed; immediate collection requested", pid)
 
     logger.info("Thresholds updated for [%s]: alerts=%s primary_sensor=%s", pid, pcfg, new_primary)
     return JSONResponse(content={"status": "ok", "pid": pid, "alerts": pcfg})

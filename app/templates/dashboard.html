@@ -240,15 +240,23 @@
     <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden mb-8">
       <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between gap-3">
         <h2 class="text-base font-bold text-white">Container Health</h2>
-        {% if container_health.overall_status == 'critical' %}
-          <span class="text-xs px-2 py-1 rounded-full bg-red-700 text-red-100 border border-red-500">Critical</span>
-        {% elif container_health.overall_status == 'warning' %}
-          <span class="text-xs px-2 py-1 rounded-full bg-yellow-700 text-yellow-100 border border-yellow-500">Warning</span>
-        {% elif container_health.overall_status == 'good' %}
-          <span class="text-xs px-2 py-1 rounded-full bg-green-800 text-green-200 border border-green-600">Healthy</span>
-        {% else %}
-          <span class="text-xs px-2 py-1 rounded-full bg-gray-700 text-gray-300 border border-gray-600">Unknown</span>
-        {% endif %}
+        <div class="flex items-center gap-2 flex-wrap justify-end">
+          {% if container_health.overall_status == 'critical' %}
+            <span class="text-xs px-2 py-1 rounded-full bg-red-700 text-red-100 border border-red-500">Critical</span>
+          {% elif container_health.overall_status == 'warning' %}
+            <span class="text-xs px-2 py-1 rounded-full bg-yellow-700 text-yellow-100 border border-yellow-500">Warning</span>
+          {% elif container_health.overall_status == 'good' %}
+            <span class="text-xs px-2 py-1 rounded-full bg-green-800 text-green-200 border border-green-600">Healthy</span>
+          {% else %}
+            <span class="text-xs px-2 py-1 rounded-full bg-gray-700 text-gray-300 border border-gray-600">Unknown</span>
+          {% endif %}
+          {% if container_health.can_reboot %}
+            <button id="container-reboot-btn" onclick="rebootContainer()"
+              class="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-red-50 border border-red-500">
+              Reboot Container
+            </button>
+          {% endif %}
+        </div>
       </div>
       <div class="px-5 py-3 border-b border-gray-800 text-xs text-gray-400 flex flex-wrap gap-3">
         <span>Disk Warning ≤ {{ container_health.disk_warning_free_percent|int }}% free</span>
@@ -260,6 +268,9 @@
             {{ (container_health.uptime_seconds // 86400)|int }}d
             {{ ((container_health.uptime_seconds % 86400) // 3600)|int }}h
           </span>
+        {% endif %}
+        {% if container_health.can_reboot %}
+          <span id="container-reboot-status" class="text-gray-500"></span>
         {% endif %}
       </div>
       <div class="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -712,6 +723,48 @@
         {% for card in cards %}loadSensors('{{ card.id }}');
         {% endfor %}
         setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      }
+    }
+
+    async function rebootContainer() {
+      const prompt = 'Reboot this container now? The dashboard will go offline for about 1-2 minutes.';
+      if (!confirm(prompt)) return;
+
+      const statusEl = document.getElementById('container-reboot-status');
+      const btn = document.getElementById('container-reboot-btn');
+      if (statusEl) {
+        statusEl.classList.remove('text-green-400', 'text-red-400');
+        statusEl.classList.add('text-gray-400');
+        statusEl.textContent = 'Scheduling reboot…';
+      }
+      if (btn) btn.disabled = true;
+
+      try {
+        const resp = await fetch('/api/system/reboot', { method: 'POST' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          const msg = data.error || resp.status;
+          if (statusEl) {
+            statusEl.textContent = `✗ ${msg}`;
+            statusEl.classList.replace('text-gray-400', 'text-red-400');
+          } else {
+            alert(`Reboot failed: ${msg}`);
+          }
+          if (btn) btn.disabled = false;
+          return;
+        }
+        if (statusEl) {
+          statusEl.textContent = `✓ Reboot scheduled in ${data.delay_seconds || 2}s`;
+          statusEl.classList.replace('text-gray-400', 'text-green-400');
+        }
+      } catch (e) {
+        if (statusEl) {
+          statusEl.textContent = `✗ ${e.message}`;
+          statusEl.classList.replace('text-gray-400', 'text-red-400');
+        } else {
+          alert(`Reboot failed: ${e.message}`);
+        }
+        if (btn) btn.disabled = false;
       }
     }
 
