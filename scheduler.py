@@ -64,7 +64,7 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-def collect_all() -> None:
+def collect_all() -> bool:
     """Poll every enabled property and run alert checks. Called by APScheduler.
 
     A threading lock prevents concurrent runs (e.g. when the scheduler fires
@@ -72,7 +72,7 @@ def collect_all() -> None:
     """
     if not _collect_lock.acquire(blocking=False):
         logger.warning("collect_all: previous run still in progress — skipping this trigger")
-        return
+        return False
     try:
         logger.info("=== Collection run starting at %s ===",
                     datetime.now().strftime("%H:%M:%S"))
@@ -94,6 +94,7 @@ def collect_all() -> None:
             except Exception as exc:
                 logger.error("Collection run error [%s]: %s", pc.prop_id, exc)
         logger.info("=== Collection run complete ===")
+        return True
     finally:
         _collect_lock.release()
 

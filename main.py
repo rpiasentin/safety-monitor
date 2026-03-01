@@ -649,8 +649,15 @@ async def update_thresholds(pid: str, request: Request,
     # Update scheduler in-memory alert state (no restart needed)
     scheduler.update_property_alert_cfg(pid, pcfg)
     if primary_changed:
-        asyncio.get_running_loop().run_in_executor(None, scheduler.collect_all)
-        logger.info("[%s] primary sensor changed; immediate collection requested", pid)
+        def _refresh_with_retry():
+            # A collection might already be running; retry briefly so sensor
+            # changes still refresh quickly after the lock is released.
+            for _ in range(3):
+                if scheduler.collect_all():
+                    return
+                time.sleep(5)
+        asyncio.get_running_loop().run_in_executor(None, _refresh_with_retry)
+        logger.info("[%s] primary sensor changed; immediate collection requested (with retry)", pid)
 
     logger.info("Thresholds updated for [%s]: alerts=%s primary_sensor=%s", pid, pcfg, new_primary)
     return JSONResponse(content={"status": "ok", "pid": pid, "alerts": pcfg})
