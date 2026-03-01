@@ -342,7 +342,9 @@ def get_dashboard_alerts(hours: int = 24,
     """
     Alerts shown on the dashboard:
       1) all unresolved water alerts (latched until manual clear)
-      2) recent non-water alerts in the time window
+      2) recent non-water alerts in the time window, collapsed so repeated
+         triggers for the same property/type/sensor appear as one row with
+         repeat_count.
     """
     with get_conn(path) as conn:
         water_rows = conn.execute("""
@@ -356,10 +358,39 @@ def get_dashboard_alerts(hours: int = 24,
               AND resolved_at IS NULL
               AND triggered_at >= datetime('now', ?)
             ORDER BY id DESC
-            LIMIT ?
-        """, (f"-{hours} hours", int(recent_limit))).fetchall()
+        """, (f"-{hours} hours",)).fetchall()
 
-    out = [dict(r) for r in water_rows] + [dict(r) for r in recent_rows]
+    # Keep all active water alerts as individual rows (latched by sensor).
+    water_out = []
+    for r in water_rows:
+        d = dict(r)
+        d["repeat_count"] = 1
+        water_out.append(d)
+
+    # Collapse repeated non-water alerts by property/type/sensor.
+    grouped: dict[tuple[str, str, str], dict] = {}
+    for r in recent_rows:
+        d = dict(r)
+        key = (
+            str(d.get("property_id") or ""),
+            str(d.get("alert_type") or ""),
+            str(d.get("sensor_id") or ""),
+        )
+        if key not in grouped:
+            d["repeat_count"] = 1
+            grouped[key] = d
+        else:
+            grouped[key]["repeat_count"] = int(grouped[key].get("repeat_count", 1)) + 1
+
+    recent_out = sorted(
+        grouped.values(),
+        key=lambda row: int(row.get("id") or 0),
+        reverse=True,
+    )
+    if int(recent_limit) > 0:
+        recent_out = recent_out[:int(recent_limit)]
+
+    out = water_out + recent_out
     out.sort(key=lambda r: int(r.get("id") or 0), reverse=True)
     return out
 

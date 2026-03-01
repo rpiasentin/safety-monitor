@@ -629,6 +629,11 @@
             </p>
           </div>
           <div class="flex items-center gap-2 flex-shrink-0">
+            {% if (alert.repeat_count or 1) > 1 %}
+            <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-700 border border-gray-600 text-gray-200">
+              ×{{ alert.repeat_count }}
+            </span>
+            {% endif %}
             <span class="text-xs font-mono text-gray-600">{{ alert.property_id }}</span>
             {% if alert.alert_type == 'water' and not alert.resolved_at %}
             <button onclick="clearWaterAlert({{ alert.id }})"
