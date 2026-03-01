@@ -89,6 +89,7 @@ alerts:
     enabled: true
     threshold_fahrenheit: 40
     critical_fahrenheit: 32
+    graph_hours: 24
     indoor_only: true
     pushover_enabled: true
     cooldown_minutes: 60

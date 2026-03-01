@@ -212,6 +212,41 @@ def get_readings_history(property_id: str, hours: int = 24,
     return [dict(r) for r in rows]
 
 
+def get_temperature_history(property_id: str, sensor_name: str, hours: int = 24,
+                            path: str = DB_PATH) -> list[dict]:
+    """
+    Return a single sensor's temperature trend from merged raw_json all_temps.
+    Output rows: {collected_at, temperature_f}
+    """
+    if not sensor_name:
+        return []
+    with get_conn(path) as conn:
+        rows = conn.execute("""
+            SELECT collected_at, raw_json
+            FROM readings
+            WHERE property_id=?
+              AND source='merged'
+              AND collected_at >= datetime('now', ?)
+            ORDER BY collected_at ASC
+        """, (property_id, f"-{hours} hours")).fetchall()
+
+    out = []
+    for r in rows:
+        try:
+            raw = json.loads(r["raw_json"] or "{}")
+            all_temps = raw.get("all_temps") or {}
+            if sensor_name not in all_temps:
+                continue
+            temp_val = float(all_temps[sensor_name])
+            out.append({
+                "collected_at": r["collected_at"],
+                "temperature_f": temp_val,
+            })
+        except Exception:
+            continue
+    return out
+
+
 # ── Hubitat devices ───────────────────────────────────────────────────────────
 
 def upsert_hubitat_devices(property_id: str, devices: list[dict],

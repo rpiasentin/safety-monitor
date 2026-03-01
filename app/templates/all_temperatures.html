@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ prop.name }} — All Temperatures · {{ config.web.title }}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <meta http-equiv="refresh" content="60">
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <a href="/" class="text-gray-400 hover:text-white transition-colors text-sm">← Dashboard</a>
+      <span class="text-gray-700">|</span>
+      <a href="/devices/{{ prop.id }}" class="text-gray-400 hover:text-white transition-colors text-sm">Device Activity</a>
+      <span class="text-gray-700">|</span>
+      <div class="flex items-center gap-2">
+        <span class="text-xl">🌡</span>
+        <h1 class="text-lg font-bold text-white tracking-tight">{{ prop.name }} — All Temperatures</h1>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 text-sm text-gray-400">
+      <span id="clock" class="font-mono tabular-nums"></span>
+      <span class="text-gray-600">auto-refresh 60s</span>
+    </div>
+  </header>
+
+  <main class="p-6 max-w-6xl mx-auto space-y-6">
+
+    <div class="bg-gray-900 rounded-xl border border-gray-800 px-4 py-3 text-xs text-gray-400 flex flex-wrap gap-4">
+      <span>Graph window: {{ graph_hours }}h (set in Alert Rules / Configuration)</span>
+      {% if latest_collected_at %}
+      <span>Latest sample: {{ ago(latest_collected_at) }}</span>
+      {% endif %}
+      <span>Sensors: {{ sensors|length }}</span>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-800">
+          <h2 class="text-base font-bold text-white">Current Sensor Values</h2>
+        </div>
+        {% if sensors %}
+        <div class="divide-y divide-gray-800">
+          {% for s in sensors %}
+          <div class="px-5 py-3 flex items-center gap-3">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm text-gray-200 truncate">{{ s.name }}</p>
+              <p class="text-xs mt-0.5
+                {% if s.classification == 'outdoor' %}text-green-400
+                {% elif s.classification == 'excluded' %}text-gray-500
+                {% else %}text-blue-300{% endif %}">
+                {{ s.classification }}
+              </p>
+            </div>
+            <div class="text-sm font-semibold text-gray-100 w-20 text-right">
+              {{ fmt_temp(s.value) }}
+            </div>
+            <button onclick='viewSensor({{ s.name | tojson }})'
+                    class="text-xs px-2.5 py-1 rounded border
+                    {% if selected_sensor == s.name %}
+                      bg-blue-700 border-blue-500 text-blue-50
+                    {% else %}
+                      bg-gray-700 border-gray-600 text-gray-200 hover:bg-gray-600
+                    {% endif %}">
+              Graph
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="px-5 py-10 text-center text-sm text-gray-500">
+          No temperature sensors found yet. Run a collection cycle and refresh.
+        </div>
+        {% endif %}
+      </div>
+
+      <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-800">
+          <h2 class="text-base font-bold text-white">
+            {% if selected_sensor %}Trend: {{ selected_sensor }} (last {{ graph_hours }}h){% else %}Sensor Trend{% endif %}
+          </h2>
+        </div>
+        <div class="p-4">
+          {% if selected_sensor and graph_values and graph_values|length > 1 %}
+          <canvas id="tempChart" height="220"></canvas>
+          {% elif selected_sensor %}
+          <p class="text-sm text-gray-500 py-10 text-center">
+            Not enough points for "{{ selected_sensor }}" in the last {{ graph_hours }}h.
+          </p>
+          {% else %}
+          <p class="text-sm text-gray-500 py-10 text-center">
+            Select a sensor to view its graph.
+          </p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function updateClock() {
+      const now = new Date();
+      document.getElementById('clock').textContent = now.toLocaleTimeString('en-US', {
+        hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+    }
+    updateClock();
+    setInterval(updateClock, 1000);
+
+    function viewSensor(name) {
+      const u = new URL(window.location.href);
+      u.searchParams.set('sensor', name);
+      window.location.href = u.toString();
+    }
+
+    {% if selected_sensor and graph_values and graph_values|length > 1 %}
+    (() => {
+      const labels = {{ graph_labels | tojson }};
+      const values = {{ graph_values | tojson }};
+      const ctx = document.getElementById('tempChart');
+      if (!ctx) return;
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{
+            label: '{{ selected_sensor }} (°F)',
+            data: values,
+            borderColor: 'rgb(59, 130, 246)',
+            backgroundColor: 'rgba(59, 130, 246, 0.15)',
+            tension: 0.2,
+            pointRadius: 1.5,
+            fill: true,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: '#d1d5db' } }
+          },
+          scales: {
+            x: {
+              ticks: { color: '#9ca3af', maxTicksLimit: 8 },
+              grid: { color: 'rgba(75,85,99,0.3)' }
+            },
+            y: {
+              ticks: { color: '#9ca3af' },
+              grid: { color: 'rgba(75,85,99,0.3)' }
+            }
+          }
+        }
+      });
+    })();
+    {% endif %}
+  </script>
+
+</body>
+</html>

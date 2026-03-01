@@ -336,6 +336,8 @@ async def dashboard(request: Request):
                                             global_temp_cfg.get("threshold_fahrenheit", 40)),
                 "indoor_temp_critical": pcfg.get("indoor_temp_critical",
                                             global_temp_cfg.get("critical_fahrenheit", 32)),
+                "temp_graph_hours":    pcfg.get("temp_graph_hours",
+                                            global_temp_cfg.get("graph_hours", 24)),
                 "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
                 "outdoor_temp_critical": pcfg.get("outdoor_temp_critical", 0),
                 "outdoor_sensors":    pcfg.get("outdoor_sensors", []),
@@ -440,6 +442,73 @@ async def device_activity(request: Request, property_id: str):
     })
 
 
+@app.get("/temperatures/{property_id}", response_class=HTMLResponse)
+async def all_temperatures(request: Request, property_id: str, sensor: str = ""):
+    """Per-property temperature view with current values and recent trend graph."""
+    props = CONFIG.get("properties", [])
+    prop = next((p for p in props if p["id"] == property_id), None)
+    if not prop:
+        return HTMLResponse(f"<h1>Property '{property_id}' not found</h1>", status_code=404)
+
+    row = db.get_latest_reading(property_id, source="merged") or {}
+    all_temps: dict[str, float] = {}
+    if row:
+        raw_str = row.get("raw_json")
+        if raw_str:
+            try:
+                raw = json.loads(raw_str)
+                all_temps = dict(raw.get("all_temps") or {})
+            except Exception:
+                all_temps = {}
+
+    pcfg = prop.get("alerts", {})
+    global_temp = (CONFIG.get("alerts", {}) or {}).get("temperature", {})
+    try:
+        graph_hours = int(float(pcfg.get("temp_graph_hours", global_temp.get("graph_hours", 24))))
+    except Exception:
+        graph_hours = 24
+    graph_hours = max(1, min(graph_hours, 24 * 30))
+
+    outdoors = {str(s).strip().lower() for s in (pcfg.get("outdoor_sensors") or [])}
+    excludes = {str(s).strip().lower() for s in (pcfg.get("exclude_sensors") or [])}
+    sensors = []
+    for name in sorted(all_temps.keys(), key=lambda s: s.lower()):
+        key = str(name).strip().lower()
+        cls = "excluded" if key in excludes else ("outdoor" if key in outdoors else "indoor")
+        sensors.append({
+            "name": name,
+            "value": all_temps.get(name),
+            "classification": cls,
+        })
+
+    selected_sensor = ""
+    if sensor and sensor in all_temps:
+        selected_sensor = sensor
+    elif sensors:
+        selected_sensor = sensors[0]["name"]
+
+    graph_series = []
+    graph_labels = []
+    graph_values = []
+    if selected_sensor:
+        graph_series = db.get_temperature_history(property_id, selected_sensor, hours=graph_hours)
+        graph_labels = [str(p.get("collected_at")) for p in graph_series]
+        graph_values = [p.get("temperature_f") for p in graph_series]
+
+    return templates.TemplateResponse("all_temperatures.html", {
+        "request": request,
+        "prop": prop,
+        "config": CONFIG,
+        "latest_collected_at": row.get("collected_at") if row else None,
+        "graph_hours": graph_hours,
+        "sensors": sensors,
+        "selected_sensor": selected_sensor,
+        "graph_series": graph_series,
+        "graph_labels": graph_labels,
+        "graph_values": graph_values,
+    })
+
+
 @app.get("/api/status")
 async def api_status():
     """JSON snapshot of all properties — useful for external scripts / health checks."""
@@ -524,6 +593,8 @@ async def get_thresholds():
                                          global_temp.get("threshold_fahrenheit", 40)),
             "indoor_temp_critical":  pcfg.get("indoor_temp_critical",
                                          global_temp.get("critical_fahrenheit", 32)),
+            "temp_graph_hours":      pcfg.get("temp_graph_hours",
+                                         global_temp.get("graph_hours", 24)),
             "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
             "outdoor_temp_critical": pcfg.get("outdoor_temp_critical", 0),
             "outdoor_sensors":       pcfg.get("outdoor_sensors", []),
@@ -609,6 +680,8 @@ async def update_thresholds(pid: str, request: Request,
                 "offline_cooldown_minutes"):
         if key in body and body[key] is not None:
             pcfg[key] = float(body[key])
+    if "temp_graph_hours" in body and body["temp_graph_hours"] is not None:
+        pcfg["temp_graph_hours"] = max(1, int(float(body["temp_graph_hours"])))
 
     # Sensor lists (accept comma-separated string or list)
     for key in ("outdoor_sensors", "exclude_sensors",
