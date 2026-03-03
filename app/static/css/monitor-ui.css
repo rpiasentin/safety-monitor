@@ -77,6 +77,12 @@
   z-index: 1;
 }
 
+#summary-section,
+#alerts-section,
+[id^="prop-"] {
+  scroll-margin-top: 92px;
+}
+
 .monitor-hero {
   border: 1px solid rgba(134, 189, 226, 0.25);
   border-radius: var(--radius-lg);
@@ -133,6 +139,7 @@
   gap: 0.45rem;
   overflow-x: auto;
   padding-bottom: 0.12rem;
+  scroll-snap-type: x proximity;
   scrollbar-width: thin;
 }
 
@@ -148,6 +155,7 @@
   padding: 0.36rem 0.72rem;
   font-size: 0.76rem;
   white-space: nowrap;
+  scroll-snap-align: start;
 }
 
 .quick-jump-link:hover {
@@ -196,6 +204,18 @@
   background: linear-gradient(180deg, rgba(51, 88, 122, 0.28), rgba(16, 30, 45, 0.82));
   color: #dbecff !important;
   transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.property-link-button {
+  border-radius: 12px;
+  border: 1px solid rgba(129, 171, 202, 0.24);
+  padding: 0.46rem 0.62rem;
+  background: rgba(16, 34, 52, 0.44);
+}
+
+.property-link-button:hover {
+  border-color: rgba(89, 198, 199, 0.72);
+  background: rgba(28, 52, 78, 0.56);
 }
 
 .monitor-button:hover {
@@ -481,6 +501,26 @@
   background: rgba(37, 65, 95, 0.28);
 }
 
+.mobile-thumb-dock {
+  display: none;
+}
+
+.thumb-dock-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border-radius: 12px;
+  border: 1px solid rgba(139, 178, 208, 0.42);
+  background: linear-gradient(180deg, rgba(34, 66, 96, 0.92), rgba(18, 34, 52, 0.95));
+  color: #e8f5ff;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  min-height: 44px;
+  padding: 0.35rem 0.65rem;
+}
+
 @keyframes rise-in {
   from {
     opacity: 0;
@@ -517,6 +557,10 @@
 }
 
 @media (max-width: 860px) {
+  .dashboard-page .monitor-main {
+    padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
   .monitor-settings-wrap:not(.hidden) {
     position: fixed;
     inset: 0;
@@ -532,6 +576,10 @@
     overflow-y: auto;
   }
 
+  .dashboard-page.settings-open .mobile-thumb-dock {
+    display: none !important;
+  }
+
   .monitor-hero {
     padding: 0.8rem;
   }
@@ -545,6 +593,23 @@
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 0.5rem;
+  }
+
+  .monitor-nav-link,
+  .monitor-button,
+  .quick-jump-link,
+  .sensor-graph-btn,
+  .alert-clear-btn,
+  .settings-close-btn,
+  .monitor-settings button {
+    min-height: 44px;
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    touch-action: manipulation;
+  }
+
+  .monitor-header #settings-btn {
+    margin-left: auto;
   }
 
   .monitor-header .text-xl,
@@ -602,6 +667,38 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .property-link-button {
+    min-height: 44px;
+  }
+
+  .monitor-alerts .alert-row {
+    flex-wrap: wrap;
+    gap: 0.55rem;
+  }
+
+  .monitor-alerts .alert-row > div:last-child {
+    margin-left: auto;
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .dashboard-page .mobile-thumb-dock {
+    position: fixed;
+    left: 0.72rem;
+    right: 0.72rem;
+    bottom: calc(0.72rem + env(safe-area-inset-bottom, 0px));
+    z-index: 72;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.48rem;
+    padding: 0.56rem;
+    border-radius: 16px;
+    border: 1px solid rgba(136, 173, 202, 0.35);
+    background: rgba(7, 16, 27, 0.92);
+    box-shadow: 0 16px 30px rgba(2, 9, 18, 0.45);
+    backdrop-filter: blur(8px);
+  }
+
   .device-head {
     display: none !important;
   }
@@ -643,6 +740,17 @@
 }
 
 @media (max-width: 640px) {
+  .monitor-nav-link {
+    font-size: 0.72rem;
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+  }
+
+  .monitor-header #clock {
+    min-width: 110px;
+    text-align: center;
+  }
+
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.45rem;
@@ -661,8 +769,21 @@
   }
 
   .quick-jump-link {
-    font-size: 0.72rem;
-    padding: 0.32rem 0.62rem;
+    font-size: 0.74rem;
+    padding: 0.44rem 0.78rem;
+  }
+
+  .feed-health-label {
+    font-size: 0.58rem;
+  }
+
+  .feed-health-value {
+    font-size: 0.68rem;
+  }
+
+  .sensor-list-row {
+    padding-top: 0.72rem !important;
+    padding-bottom: 0.72rem !important;
   }
 }
 

@@ -55,7 +55,7 @@
               {{ fmt_temp(s.value) }}
             </div>
             <button onclick='viewSensor({{ s.name | tojson }})'
-                    class="monitor-button text-xs px-3 py-1.5 rounded-lg {% if selected_sensor == s.name %}bg-cyan-900/50 border-cyan-500 text-cyan-100{% endif %}">
+                    class="monitor-button sensor-graph-btn text-xs px-3 py-1.5 rounded-lg {% if selected_sensor == s.name %}bg-cyan-900/50 border-cyan-500 text-cyan-100{% endif %}">
               Graph
             </button>
           </div>
