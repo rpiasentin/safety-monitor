@@ -103,21 +103,43 @@ Cooldowns prevent repeat Pushover spam: 60 min (temp), 120 min (battery/offline)
 pct exec 104 -- bash -c 'cd /opt/safety-monitor/app && git pull && systemctl restart safety-monitor'
 ```
 
-## Cowork session preflight
+## Cowork session preflight (zero-friction)
 
-At the start of any new Cowork session working on this repo:
+Run this first in every new thread/session:
 
-1. The SSH key is at `~/.ssh/safety-monitor-github` (ED25519, fingerprint `SHA256:ihzOBnX/CMQweewRVjqS8AjD/FEgwHmQp2v7nMOePXw`)
-2. SSH config at `~/.ssh/config` already routes `github.com` to that key
-3. The workspace git remote may not be set — run:
-   ```bash
-   git remote set-url origin git@github.com:rpiasentin/safety-monitor.git
-   # or if no remote:
-   git remote add origin git@github.com:rpiasentin/safety-monitor.git
-   ```
-4. Sync workspace to latest before making changes:
-   ```bash
-   git fetch origin && git reset --hard origin/main
-   ```
-5. All code changes go: **edit in workspace → commit → push → `git pull` in CT104**
-   Never write files directly to the container.
+```bash
+cd /Users/rpias/dev/safety-monitor
+./tools/preflight_access.sh
+```
+
+What it verifies:
+1. Local repo health (branch, clean tree, correct origin)
+2. GitHub access (`git ls-remote`, `gh auth status` if `gh` is installed)
+3. CT104 SSH access with key auth
+4. CT104 runtime health (`safety-monitor` service + `/api/status`)
+
+### One-time Codex approvals (for new agents/threads)
+
+Approve these command prefixes once to avoid repeated permission prompts:
+
+1. `ssh -i /Users/rpias/dev/vscode-dev-env/.notes_access/ssh/ct104_root_ed25519`
+2. `git -C /Users/rpias/dev/safety-monitor`
+3. `gh auth`
+4. `gh repo`
+
+### Canonical remotes
+
+Expected `origin` for this repo:
+
+```bash
+https://github.com/rpiasentin/safety-monitor.git
+```
+
+### Deployment rule
+
+Source of truth is `origin/main`.
+Standard flow:
+
+1. edit in workspace
+2. commit + push to `origin/main`
+3. deploy to CT104 from git
