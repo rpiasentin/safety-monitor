@@ -251,7 +251,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "app/templates"))
+BASE_DIR = os.path.dirname(__file__)
+templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "app/templates"))
+app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "app/static")), name="static")
 
 # Register Jinja2 globals for formatting helpers
 templates.env.globals.update({

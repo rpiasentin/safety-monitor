@@ -6,100 +6,90 @@
   <title>{{ prop.name }} — All Temperatures · {{ config.web.title }}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ request.url_for('static', path='css/monitor-ui.css') }}">
   <meta http-equiv="refresh" content="60">
-  <style>
-    body { font-family: 'Inter', system-ui, sans-serif; }
-  </style>
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen">
+<body class="bg-gray-950 text-gray-100 min-h-screen monitor-body">
 
-  <header class="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-    <div class="flex items-center gap-4">
-      <a href="/" class="text-gray-400 hover:text-white transition-colors text-sm">← Dashboard</a>
-      <span class="text-gray-700">|</span>
-      <a href="/devices/{{ prop.id }}" class="text-gray-400 hover:text-white transition-colors text-sm">Device Activity</a>
-      <span class="text-gray-700">|</span>
+  <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 monitor-header">
+    <div class="flex flex-wrap items-center gap-2 sm:gap-3">
+      <a href="/" class="monitor-nav-link text-xs sm:text-sm">← Dashboard</a>
+      <a href="/devices/{{ prop.id }}" class="monitor-nav-link text-xs sm:text-sm">📟 Device Activity</a>
       <div class="flex items-center gap-2">
-        <span class="text-xl">🌡</span>
-        <h1 class="text-lg font-bold text-white tracking-tight">{{ prop.name }} — All Temperatures</h1>
+        <span class="text-lg sm:text-xl">🌡</span>
+        <h1 class="monitor-page-title text-base sm:text-lg font-bold text-white tracking-tight">{{ prop.name }} · All Temperatures</h1>
       </div>
     </div>
-    <div class="flex items-center gap-3 text-sm text-gray-400">
-      <span id="clock" class="font-mono tabular-nums"></span>
-      <span class="text-gray-600">auto-refresh 60s</span>
+    <div class="flex items-center gap-3 text-xs sm:text-sm text-gray-300">
+      <span class="monitor-chip px-2.5 py-1 rounded-full">Auto refresh 60s</span>
+      <span id="clock" class="monitor-chip monitor-clock px-2.5 py-1 rounded-full"></span>
     </div>
   </header>
 
-  <main class="p-6 max-w-6xl mx-auto space-y-6">
-
-    <div class="bg-gray-900 rounded-xl border border-gray-800 px-4 py-3 text-xs text-gray-400 flex flex-wrap gap-4">
-      <span>Graph window: {{ graph_hours }}h (set in Alert Rules / Configuration)</span>
+  <main class="px-4 pb-8 pt-6 sm:px-6 max-w-6xl mx-auto space-y-5 monitor-main">
+    <div class="monitor-meta-strip rounded-2xl border px-4 py-3 text-xs text-gray-300 flex flex-wrap gap-3">
+      <span>Graph window: {{ graph_hours }}h</span>
       {% if latest_collected_at %}
       <span>Latest sample: {{ ago(latest_collected_at) }}</span>
       {% endif %}
       <span>Sensors: {{ sensors|length }}</span>
     </div>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-800">
-          <h2 class="text-base font-bold text-white">Current Sensor Values</h2>
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
+      <section class="monitor-card overflow-hidden">
+        <div class="px-4 sm:px-5 py-4 border-b border-gray-800">
+          <h2 class="text-base font-semibold text-white">Current Sensor Values</h2>
         </div>
         {% if sensors %}
-        <div class="divide-y divide-gray-800">
+        <div class="divide-y divide-gray-800/70">
           {% for s in sensors %}
-          <div class="px-5 py-3 flex items-center gap-3">
+          <div class="sensor-list-row px-4 sm:px-5 py-3 flex items-center gap-3 sm:gap-4">
             <div class="flex-1 min-w-0">
-              <p class="text-sm text-gray-200 truncate">{{ s.name }}</p>
-              <p class="text-xs mt-0.5
-                {% if s.classification == 'outdoor' %}text-green-400
-                {% elif s.classification == 'excluded' %}text-gray-500
-                {% else %}text-blue-300{% endif %}">
-                {{ s.classification }}
-              </p>
+              <p class="text-sm text-gray-100 truncate">{{ s.name }}</p>
+              <span class="sensor-class-pill {{ s.classification }} mt-1">{{ s.classification }}</span>
             </div>
-            <div class="text-sm font-semibold text-gray-100 w-20 text-right">
+            <div class="text-sm sm:text-base font-semibold text-gray-100 w-16 sm:w-20 text-right">
               {{ fmt_temp(s.value) }}
             </div>
             <button onclick='viewSensor({{ s.name | tojson }})'
-                    class="text-xs px-2.5 py-1 rounded border
-                    {% if selected_sensor == s.name %}
-                      bg-blue-700 border-blue-500 text-blue-50
-                    {% else %}
-                      bg-gray-700 border-gray-600 text-gray-200 hover:bg-gray-600
-                    {% endif %}">
+                    class="monitor-button text-xs px-3 py-1.5 rounded-lg {% if selected_sensor == s.name %}bg-cyan-900/50 border-cyan-500 text-cyan-100{% endif %}">
               Graph
             </button>
           </div>
           {% endfor %}
         </div>
         {% else %}
-        <div class="px-5 py-10 text-center text-sm text-gray-500">
+        <div class="px-5 py-10 text-center text-sm text-gray-400">
           No temperature sensors found yet. Run a collection cycle and refresh.
         </div>
         {% endif %}
-      </div>
+      </section>
 
-      <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
-        <div class="px-5 py-4 border-b border-gray-800">
-          <h2 class="text-base font-bold text-white">
+      <section class="monitor-card overflow-hidden">
+        <div class="px-4 sm:px-5 py-4 border-b border-gray-800">
+          <h2 class="text-base font-semibold text-white">
             {% if selected_sensor %}Trend: {{ selected_sensor }} (last {{ graph_hours }}h){% else %}Sensor Trend{% endif %}
           </h2>
         </div>
-        <div class="p-4">
+        <div class="p-4 sm:p-5 min-h-[260px]">
           {% if selected_sensor and graph_values and graph_values|length > 1 %}
-          <canvas id="tempChart" height="220"></canvas>
+          <div class="h-[260px] sm:h-[320px]">
+            <canvas id="tempChart"></canvas>
+          </div>
           {% elif selected_sensor %}
-          <p class="text-sm text-gray-500 py-10 text-center">
+          <p class="text-sm text-gray-400 py-10 text-center">
             Not enough points for "{{ selected_sensor }}" in the last {{ graph_hours }}h.
           </p>
           {% else %}
-          <p class="text-sm text-gray-500 py-10 text-center">
+          <p class="text-sm text-gray-400 py-10 text-center">
             Select a sensor to view its graph.
           </p>
           {% endif %}
         </div>
-      </div>
+      </section>
     </div>
   </main>
 
@@ -132,10 +122,11 @@
           datasets: [{
             label: '{{ selected_sensor }} (°F)',
             data: values,
-            borderColor: 'rgb(59, 130, 246)',
-            backgroundColor: 'rgba(59, 130, 246, 0.15)',
-            tension: 0.2,
+            borderColor: '#2ed3d8',
+            backgroundColor: 'rgba(46, 211, 216, 0.18)',
+            tension: 0.24,
             pointRadius: 1.5,
+            pointBackgroundColor: '#9aecef',
             fill: true,
           }]
         },
@@ -143,16 +134,16 @@
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
-            legend: { labels: { color: '#d1d5db' } }
+            legend: { labels: { color: '#d7e8f8' } }
           },
           scales: {
             x: {
-              ticks: { color: '#9ca3af', maxTicksLimit: 8 },
-              grid: { color: 'rgba(75,85,99,0.3)' }
+              ticks: { color: '#9eb5ca', maxTicksLimit: 8 },
+              grid: { color: 'rgba(128, 166, 198, 0.24)' }
             },
             y: {
-              ticks: { color: '#9ca3af' },
-              grid: { color: 'rgba(75,85,99,0.3)' }
+              ticks: { color: '#9eb5ca' },
+              grid: { color: 'rgba(128, 166, 198, 0.24)' }
             }
           }
         }

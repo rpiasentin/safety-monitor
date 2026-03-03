@@ -5,42 +5,103 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ config.web.title }}</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Sora:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ request.url_for('static', path='css/monitor-ui.css') }}">
   <meta http-equiv="refresh" content="60">
   <style>
-    body { font-family: 'Inter', system-ui, sans-serif; }
     .soc-ring { transition: stroke-dashoffset 0.5s ease; }
   </style>
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen">
+<body class="bg-gray-950 text-gray-100 min-h-screen monitor-body">
 
   <!-- Header -->
-  <header class="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between">
+  <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 monitor-header">
     <div class="flex items-center gap-3">
       <span class="text-2xl">🏔</span>
-      <h1 class="text-xl font-bold text-white tracking-tight">Safety Monitor</h1>
+      <div>
+        <h1 class="text-xl font-bold text-white tracking-tight">Safety Monitor</h1>
+        <p class="text-[11px] text-cyan-100/70 tracking-wide">CT104 live operations</p>
+      </div>
     </div>
-    <div class="flex items-center gap-4 text-sm text-gray-400">
+    <div class="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-300">
       {% set total_alerts = alerts|length %}
       {% if total_alerts > 0 %}
-        <span class="bg-red-600 text-white px-3 py-1 rounded-full font-semibold">
+        <span class="monitor-chip bg-red-600 text-white px-3 py-1 rounded-full font-semibold">
           ⚠ {{ total_alerts }} alert{{ 's' if total_alerts != 1 }}
         </span>
       {% else %}
-        <span class="bg-green-900 text-green-300 px-3 py-1 rounded-full font-semibold">✓ All clear</span>
+        <span class="monitor-chip bg-green-900 text-green-300 px-3 py-1 rounded-full font-semibold">✓ All clear</span>
       {% endif %}
-      <span id="clock" class="font-mono tabular-nums"></span>
+      <span id="clock" class="monitor-chip monitor-clock font-mono tabular-nums px-2.5 py-1 rounded-full"></span>
       <span class="text-gray-600">auto-refresh 60s</span>
       <button onclick="toggleSettings()" id="settings-btn"
-        class="text-gray-400 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-sm font-medium border border-gray-700 hover:border-gray-500"
+        class="monitor-button text-gray-200 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-xs sm:text-sm font-medium border border-gray-700 hover:border-gray-500"
         title="Alert rule settings">⚙ Alert Rules</button>
     </div>
   </header>
 
-  <main class="p-6 max-w-7xl mx-auto">
+  <main class="px-4 pb-8 pt-6 sm:px-6 max-w-7xl mx-auto monitor-main">
+    {% set summary = namespace(reporting=0, temp_critical=0, temp_warning=0, total_devices=0) %}
+    {% for card in cards %}
+      {% if card.reading %}{% set summary.reporting = summary.reporting + 1 %}{% endif %}
+      {% if card.temp_status == 'critical' %}
+        {% set summary.temp_critical = summary.temp_critical + 1 %}
+      {% elif card.temp_status == 'warning' %}
+        {% set summary.temp_warning = summary.temp_warning + 1 %}
+      {% endif %}
+      {% set summary.total_devices = summary.total_devices + (card.devices|length) %}
+    {% endfor %}
+
+    <section class="monitor-hero mb-6">
+      <div class="metric-grid">
+        <div class="metric-tile">
+          <p class="metric-label">Properties Reporting</p>
+          <p class="metric-value">{{ summary.reporting }} / {{ cards|length }}</p>
+        </div>
+        <div class="metric-tile">
+          <p class="metric-label">Temperature Watchlist</p>
+          <p class="metric-value">
+            {% if summary.temp_critical > 0 %}
+              {{ summary.temp_critical }} critical
+            {% elif summary.temp_warning > 0 %}
+              {{ summary.temp_warning }} warning
+            {% else %}
+              Stable
+            {% endif %}
+          </p>
+        </div>
+        <div class="metric-tile">
+          <p class="metric-label">Active Alerts</p>
+          <p class="metric-value">{{ alerts|length }}</p>
+        </div>
+        <div class="metric-tile">
+          <p class="metric-label">Tracked Device Batteries</p>
+          <p class="metric-value">{{ summary.total_devices }}</p>
+        </div>
+      </div>
+
+      <div class="quick-jump-wrap mt-3">
+        <p class="quick-jump-title">Quick jump</p>
+        <div class="quick-jump-scroller">
+          {% for card in cards %}
+          <a href="#prop-{{ card.id }}" class="quick-jump-link {% if card.alert_count > 0 %}is-alert{% endif %}">
+            <span>{{ card.name }}</span>
+            {% if card.alert_count > 0 %}
+              <span class="quick-jump-badge">{{ card.alert_count }}</span>
+            {% elif card.reading %}
+              <span class="quick-jump-dot"></span>
+            {% endif %}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+    </section>
 
     <!-- Settings panel (hidden by default, toggled via Alert Rules button in header) -->
-    <div id="settings-panel" class="hidden mb-8">
-      <div class="bg-gray-900 rounded-2xl border border-blue-800 overflow-hidden">
+    <div id="settings-panel" class="hidden mb-8 monitor-settings-wrap">
+      <div class="bg-gray-900 rounded-2xl border border-blue-800 overflow-hidden monitor-card monitor-settings">
         <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
           <h2 class="text-base font-bold text-white">⚙ Alert Rules — per property</h2>
           <button onclick="toggleSettings()" class="text-gray-500 hover:text-white text-sm">✕ Close</button>
@@ -51,7 +112,7 @@
         </div>
         <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
           {% for card in cards %}
-          <div class="bg-gray-800 rounded-xl p-4">
+          <div class="bg-gray-800 rounded-xl p-4 monitor-subcard">
             <div class="flex items-center justify-between mb-3">
               <h3 class="font-semibold text-white">{{ card.name }}</h3>
               <button onclick="saveThresholds('{{ card.id }}')"
@@ -246,7 +307,7 @@
     </div>
 
     {% if container_health %}
-    <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden mb-8">
+    <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden mb-8 monitor-card">
       <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between gap-3">
         <h2 class="text-base font-bold text-white">Container Health</h2>
         <div class="flex items-center gap-2 flex-wrap justify-end">
@@ -284,7 +345,7 @@
       </div>
       <div class="p-5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {% for disk in container_health.disks %}
-          <div class="rounded-xl p-4 border
+          <div class="rounded-xl p-4 border health-item
             {% if disk.status == 'critical' %}bg-red-950/40 border-red-700
             {% elif disk.status == 'warning' %}bg-yellow-950/30 border-yellow-700
             {% elif disk.status == 'good' %}bg-green-950/20 border-green-800
@@ -300,7 +361,7 @@
             {% endif %}
           </div>
         {% endfor %}
-        <div class="rounded-xl p-4 border
+        <div class="rounded-xl p-4 border health-item
           {% if container_health.memory.status == 'critical' %}bg-red-950/40 border-red-700
           {% elif container_health.memory.status == 'warning' %}bg-yellow-950/30 border-yellow-700
           {% elif container_health.memory.status == 'good' %}bg-green-950/20 border-green-800
@@ -322,12 +383,12 @@
     {% endif %}
 
     <!-- Property cards grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 property-grid">
       {% for card in cards %}
-      <div class="bg-gray-900 rounded-2xl border {% if card.alert_count > 0 %}border-red-700{% else %}border-gray-800{% endif %} overflow-hidden">
+      <div id="prop-{{ card.id }}" class="bg-gray-900 rounded-2xl border {% if card.alert_count > 0 %}border-red-700{% else %}border-gray-800{% endif %} overflow-hidden monitor-card property-card">
 
         <!-- Card header -->
-        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 property-header">
           <div>
             <h2 class="text-lg font-bold text-white">{{ card.name }}</h2>
             <p class="text-xs text-gray-500 font-mono">{{ card.id }}</p>
@@ -348,13 +409,13 @@
           </div>
         </div>
 
-        <div class="p-5 space-y-5">
+        <div class="p-5 space-y-5 property-body">
 
           <!-- Solar section (fm only — has EG4/Victron) -->
           {% if card.reading.get('soc') is not none %}
           <div>
             <p class="text-xs uppercase tracking-wider text-gray-500 mb-3 font-semibold">Solar / Battery</p>
-            <div class="flex items-center gap-6">
+            <div class="flex items-center gap-6 property-energy-main">
 
               <!-- SOC gauge -->
               <div class="relative flex-shrink-0">
@@ -378,7 +439,7 @@
               </div>
 
               <!-- Readings -->
-              <div class="grid grid-cols-2 gap-x-6 gap-y-2 flex-1">
+              <div class="grid grid-cols-2 gap-x-6 gap-y-2 flex-1 property-energy-stats">
                 {% if card.reading.get('voltage') %}
                 <div>
                   <p class="text-xs text-gray-500">Voltage</p>
@@ -424,7 +485,7 @@
             {% set total_pv = card.reading.get('pv_total_power') or card.reading.get('pv_power') %}
             {% set load     = card.reading.get('load_power') %}
             {% if pv_eg4 is not none or pv_v1 is not none or pv_v2 is not none or total_pv or load is not none %}
-            <div class="mt-3 bg-gray-800 rounded-xl px-4 py-3 space-y-1.5">
+            <div class="mt-3 bg-gray-800 rounded-xl px-4 py-3 space-y-1.5 property-generation">
               <p class="text-xs uppercase tracking-wider text-gray-500 font-semibold mb-2">Generation</p>
               {% if pv_eg4_1 is not none %}
               <div class="flex justify-between text-sm">
@@ -491,7 +552,7 @@
             <p class="text-xs uppercase tracking-wider text-gray-500 mb-3 font-semibold">Tesla</p>
             <div class="flex items-center gap-4">
               <span class="text-3xl">🚗</span>
-              <div class="grid grid-cols-2 gap-x-6 gap-y-1">
+              <div class="grid grid-cols-2 gap-x-6 gap-y-1 property-two-col">
                 <div>
                   <p class="text-xs text-gray-500">Battery</p>
                   <p class="text-sm font-semibold">{{ fmt_pct(card.reading.get('tesla_soc')) }}</p>
@@ -520,7 +581,7 @@
             <p class="text-xs uppercase tracking-wider text-gray-500 mb-3 font-semibold">Powerwall</p>
             <div class="flex items-center gap-4">
               <span class="text-3xl">🔋</span>
-              <div class="grid grid-cols-2 gap-x-6 gap-y-1">
+              <div class="grid grid-cols-2 gap-x-6 gap-y-1 property-two-col">
                 <div>
                   <p class="text-xs text-gray-500">Charge</p>
                   <p class="text-sm font-semibold">{{ fmt_pct(card.reading.get('soc')) }}</p>
@@ -542,7 +603,7 @@
           {% if card.primary_temp is not none %}
           <div>
             <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">Temperature</p>
-            <div class="flex items-center gap-3">
+            <div class="flex items-center gap-3 property-temp-row">
               {% set ts = card.temp_status %}
               <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold
                 {% if ts == 'critical' %}bg-red-900 text-red-300
@@ -563,10 +624,10 @@
             <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">
               Device Batteries ({{ card.devices|length }})
             </p>
-            <div class="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+            <div class="space-y-1.5 max-h-40 overflow-y-auto pr-1 property-battery-list">
               {% for dev in card.devices %}
               {% set bs = battery_status(dev.battery_pct) %}
-              <div class="flex items-center justify-between text-sm">
+              <div class="flex items-center justify-between text-sm property-battery-item">
                 <span class="text-gray-300 truncate max-w-[65%]">{{ dev.friendly_name }}</span>
                 <span class="font-semibold flex-shrink-0
                   {% if bs == 'critical' %}text-red-400
@@ -591,12 +652,12 @@
           {% endfor %}
           {% if has_hubitat.found %}
           <a href="/devices/{{ card.id }}"
-             class="flex items-center justify-between text-xs text-gray-500 hover:text-blue-400 transition-colors mt-1 pt-2 border-t border-gray-800 group">
+             class="monitor-link-row flex items-center justify-between text-xs text-gray-300 hover:text-blue-300 transition-colors mt-1 pt-2 border-t border-gray-800 group">
             <span>📟 Device activity</span>
             <span class="group-hover:translate-x-0.5 transition-transform">→</span>
           </a>
           <a href="/temperatures/{{ card.id }}"
-             class="flex items-center justify-between text-xs text-gray-500 hover:text-blue-400 transition-colors mt-1 group">
+             class="flex items-center justify-between text-xs text-gray-300 hover:text-blue-300 transition-colors mt-1 group">
             <span>🌡 All temperatures</span>
             <span class="group-hover:translate-x-0.5 transition-transform">→</span>
           </a>
@@ -604,7 +665,7 @@
 
           <!-- No data state -->
           {% if not card.reading %}
-          <div class="flex flex-col items-center py-6 text-gray-600">
+          <div class="flex flex-col items-center py-6 text-gray-600 property-empty">
             <span class="text-4xl mb-2">📡</span>
             <p class="text-sm">No data collected yet</p>
             <p class="text-xs">Waiting for first collection cycle...</p>
@@ -618,13 +679,13 @@
 
     <!-- Recent alerts -->
     {% if alerts %}
-    <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden">
+    <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden monitor-card monitor-alerts">
       <div class="px-5 py-4 border-b border-gray-800">
         <h2 class="text-base font-bold text-white">Alerts (active leaks + recent)</h2>
       </div>
       <div class="divide-y divide-gray-800">
         {% for alert in alerts %}
-        <div id="alert-row-{{ alert.id }}" class="px-5 py-3 flex items-start gap-3">
+        <div id="alert-row-{{ alert.id }}" class="px-5 py-3 flex items-start gap-3 alert-row">
           <span class="flex-shrink-0 mt-0.5
             {% if alert.severity == 'critical' %}text-red-400
             {% else %}text-yellow-400{% endif %}">
@@ -665,7 +726,7 @@
   </main>
 
   <!-- Footer -->
-  <footer class="text-center py-6 text-gray-700 text-xs">
+  <footer class="monitor-footer text-center py-6 text-xs">
     Safety Monitor · Tailscale-accessible · data refreshes every 15 min · page auto-refreshes every 60s
   </footer>
 
