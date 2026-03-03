@@ -109,7 +109,7 @@ Run this first in every new thread/session:
 
 ```bash
 cd /Users/rpias/dev/safety-monitor
-./tools/preflight_access.sh
+make preflight
 ```
 
 What it verifies:
