@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ config.web.title }}</title>
+  <title>Piasentin Ranch and properties safety monitor</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,7 +21,7 @@
     <div class="flex items-center gap-3">
       <span class="text-2xl">🏔</span>
       <div>
-        <h1 class="text-xl font-bold text-white tracking-tight">Safety Monitor</h1>
+        <h1 class="text-xl font-bold text-white tracking-tight">Piasentin Ranch and properties safety monitor</h1>
         <p class="text-[11px] text-cyan-100/70 tracking-wide">CT104 live operations</p>
       </div>
     </div>
@@ -389,9 +389,19 @@
 
         <!-- Card header -->
         <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 property-header">
-          <div>
+          <div class="property-name-wrap">
             <h2 class="text-lg font-bold text-white">{{ card.name }}</h2>
             <p class="text-xs text-gray-500 font-mono">{{ card.id }}</p>
+            {% if card.feed_health %}
+            <div class="feed-health-wrap mt-2">
+              {% for feed in card.feed_health %}
+              <div class="feed-health-box feed-{{ feed.status }}">
+                <span class="feed-health-label">{{ feed.label }}</span>
+                <span class="feed-health-value">{{ feed.last_activity }}</span>
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
           </div>
           <div class="flex items-center gap-2">
             {% if card.alert_count > 0 %}

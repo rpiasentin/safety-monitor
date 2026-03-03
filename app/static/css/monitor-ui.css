@@ -257,6 +257,68 @@
   background: linear-gradient(180deg, rgba(31, 57, 85, 0.48), rgba(16, 30, 47, 0.25));
 }
 
+.property-name-wrap {
+  min-width: 0;
+}
+
+.feed-health-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.36rem;
+}
+
+.feed-health-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 10px;
+  padding: 0.23rem 0.46rem;
+  border: 1px solid rgba(148, 177, 202, 0.3);
+  background: rgba(19, 38, 57, 0.62);
+}
+
+.feed-health-label {
+  font-size: 0.62rem;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #b3c8da;
+}
+
+.feed-health-value {
+  font-size: 0.71rem;
+  line-height: 1;
+  font-weight: 700;
+  color: #f4fbff;
+}
+
+.feed-health-box.feed-good {
+  border-color: rgba(69, 219, 166, 0.65);
+  background: rgba(25, 87, 66, 0.48);
+}
+
+.feed-health-box.feed-good .feed-health-value {
+  color: #9ef2d2;
+}
+
+.feed-health-box.feed-warning {
+  border-color: rgba(245, 198, 101, 0.72);
+  background: rgba(103, 75, 25, 0.5);
+}
+
+.feed-health-box.feed-warning .feed-health-value {
+  color: #ffdf99;
+}
+
+.feed-health-box.feed-critical {
+  border-color: rgba(249, 126, 136, 0.72);
+  background: rgba(99, 34, 42, 0.52);
+}
+
+.feed-health-box.feed-critical .feed-health-value {
+  color: #ffc6cd;
+}
+
 .property-body {
   display: grid;
   gap: 1rem;
@@ -500,6 +562,10 @@
     gap: 0.4rem;
   }
 
+  .property-name-wrap {
+    width: 100%;
+  }
+
   .property-body {
     gap: 0.8rem;
   }
@@ -516,6 +582,11 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 0.7rem !important;
+  }
+
+  .feed-health-box {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .property-energy-stats {

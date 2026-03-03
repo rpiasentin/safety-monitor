@@ -109,6 +109,61 @@ def _reboot_command() -> list[str] | None:
     return None
 
 
+def _parse_timestamp_utc(raw_ts: str | None) -> datetime | None:
+    """Parse mixed timestamp formats and normalize to UTC."""
+    if not raw_ts:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _collector_feed_health(label: str, collected_at: str | None) -> dict:
+    """
+    Build feed health payload with traffic-light status:
+      green  <= 5 minutes
+      yellow <= 10 minutes
+      red    > 10 minutes or missing/not parseable
+    """
+    ts = _parse_timestamp_utc(collected_at)
+    if not ts:
+        return {
+            "label": label,
+            "status": "critical",
+            "last_activity": "not responding",
+            "collected_at": None,
+        }
+
+    age_seconds = max(0, int((datetime.now(timezone.utc) - ts).total_seconds()))
+    age_minutes = age_seconds / 60.0
+    if age_minutes <= 5:
+        status = "good"
+    elif age_minutes <= 10:
+        status = "warning"
+    else:
+        status = "critical"
+
+    if age_seconds < 60:
+        last_activity = "just now"
+    elif age_seconds < 3600:
+        last_activity = f"{age_seconds // 60}m ago"
+    elif age_seconds < 86400:
+        last_activity = f"{age_seconds // 3600}h ago"
+    else:
+        last_activity = f"{age_seconds // 86400}d ago"
+
+    return {
+        "label": label,
+        "status": status,
+        "last_activity": last_activity,
+        "collected_at": ts.isoformat(),
+    }
+
+
 def _collect_container_health(config: dict) -> dict:
     """
     Gather container host KPIs with an emphasis on disk availability.
@@ -306,6 +361,11 @@ async def dashboard(request: Request):
         row  = latest.get(pid, {})
         devs = db.get_hubitat_devices(pid)
         pcfg = p.get("alerts", {})
+        collector_types = {
+            str(c.get("type", "")).strip()
+            for c in p.get("collectors", [])
+            if c.get("type")
+        }
         # Find current primary_temp_sensor from collector configs
         primary_sensor = next(
             (c.get("primary_temp_sensor", "") for c in p.get("collectors", [])
@@ -319,6 +379,18 @@ async def dashboard(request: Request):
         # Temp status
         pt = row.get("primary_temp")
         ts = formatters.temp_status(pt)
+        feed_health = []
+        for source_type, label in (
+            ("hubitat_cloud", "Hubitat API response"),
+            ("eg4", "EG4 API response"),
+            ("victron", "Victron API response"),
+        ):
+            if source_type not in collector_types:
+                continue
+            source_row = db.get_latest_reading(pid, source=source_type)
+            feed_health.append(_collector_feed_health(
+                label, source_row.get("collected_at") if source_row else None
+            ))
 
         cards.append({
             "id":             pid,
@@ -326,6 +398,7 @@ async def dashboard(request: Request):
             "enabled":        p.get("enabled", True),
             "reading":        row,
             "devices":        devs,
+            "feed_health":    feed_health,
             "alert_count":    len(prop_alerts),
             "recent_alerts":  prop_alerts[:3],
             "primary_temp":   pt,
