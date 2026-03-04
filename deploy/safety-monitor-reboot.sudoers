@@ -1,0 +1,4 @@
+# Allow Safety Monitor service user to request host reboot without a password.
+# Keep this list narrow: reboot only.
+Defaults:safetymon !requiretty
+safetymon ALL=(root) NOPASSWD: /usr/sbin/reboot, /sbin/reboot, /bin/systemctl reboot

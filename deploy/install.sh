@@ -9,7 +9,7 @@ echo "=== Safety Monitor Install/Update ==="
 
 # Dependencies
 apt-get update -qq
-apt-get install -y -qq git python3-pip
+apt-get install -y -qq git python3-pip sudo
 
 # App user
 id safetymon &>/dev/null || useradd -r -s /usr/sbin/nologin -m -d $APP_DIR safetymon
@@ -39,6 +39,8 @@ fi
 
 # Systemd
 cp $APP_DIR/app/deploy/safety-monitor.service /etc/systemd/system/
+install -m 0440 $APP_DIR/app/deploy/safety-monitor-reboot.sudoers /etc/sudoers.d/safety-monitor-reboot
+visudo -cf /etc/sudoers.d/safety-monitor-reboot
 systemctl daemon-reload
 systemctl enable safety-monitor
 systemctl restart safety-monitor

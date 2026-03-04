@@ -115,6 +115,8 @@ Operational details:
   - `POST /api/property/{property_id}/locks/{device_id}/{lock|unlock}`
 - Decision log API endpoint:
   - `GET /api/system/decisions`
+- Reboot action can run under non-root service via scoped sudoers policy:
+  - `/etc/sudoers.d/safety-monitor-reboot` (installed by `deploy/install.sh`)
 - Device pruning is conservative: if Hubitat returns an empty/unusable payload, prune is skipped to avoid accidental mass removal.
 
 ## Update deployed app

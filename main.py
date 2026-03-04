@@ -91,22 +91,52 @@ def _worst_status(statuses: list[str]) -> str:
 
 
 def _reboot_command() -> list[str] | None:
-    """Return a usable reboot command for this host, or None if unavailable."""
+    """
+    Return a usable reboot command for this host, or None if unavailable.
+
+    Preference order:
+      1) direct reboot commands when running as root
+      2) passwordless sudo for reboot commands when running non-root
+    """
     candidates = [
         ["/usr/sbin/reboot"],
         ["/sbin/reboot"],
         ["reboot"],
         ["systemctl", "reboot"],
     ]
+    sudo_bin = shutil.which("sudo")
     for cmd in candidates:
         exe = cmd[0]
         if exe.startswith("/"):
-            if os.path.exists(exe):
-                return cmd
+            if not os.path.exists(exe):
+                continue
+            resolved = cmd
         else:
             found = shutil.which(exe)
             if found:
-                return [found] + cmd[1:]
+                resolved = [found] + cmd[1:]
+            else:
+                continue
+
+        # Root can run the reboot command directly.
+        if os.geteuid() == 0:
+            return resolved
+
+        # Non-root path: allow only if sudoers permits this specific command.
+        if not sudo_bin:
+            continue
+        try:
+            probe = subprocess.run(
+                [sudo_bin, "-n", "-l", "--", *resolved],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=2,
+            )
+            if probe.returncode == 0:
+                return [sudo_bin, "-n", "--", *resolved]
+        except Exception:
+            continue
     return None
 
 
@@ -277,7 +307,7 @@ def _collect_container_health(config: dict) -> dict:
         [d.get("status", "unknown") for d in disks] + [mem.get("status", "unknown")]
     )
     reboot_cmd = _reboot_command()
-    can_reboot = bool(reboot_cmd and os.geteuid() == 0)
+    can_reboot = bool(reboot_cmd)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "overall_status": overall_status,
@@ -1158,9 +1188,10 @@ async def api_system_reboot(_auth=Depends(_require_write_auth)):
     """
     cmd = _reboot_command()
     if not cmd:
-        return JSONResponse(status_code=500, content={"error": "No reboot command available on host"})
-    if os.geteuid() != 0:
-        return JSONResponse(status_code=500, content={"error": "Process is not running as root"})
+        return JSONResponse(
+            status_code=500,
+            content={"error": "No permitted reboot command available on host"},
+        )
 
     delay_seconds = 2
 
