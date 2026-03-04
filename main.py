@@ -1648,7 +1648,7 @@ async def mute_smoke_alarm(property_id: str, sensor_id: str, minutes: int,
     mute_until_dt = datetime.now(timezone.utc) + timedelta(minutes=mins)
     mute_until_ts = mute_until_dt.strftime("%Y-%m-%d %H:%M:%S")
     name = _smoke_sensor_name(property_id, sid)
-    db.set_smoke_sensor_mute(property_id, sid, mute_until=mute_until_ts, friendly_name=name)
+    db.set_smoke_sensor_mute(property_id, sid, muted_until=mute_until_ts, friendly_name=name)
     _record_system_event(
         event_type="smoke_alarm_muted",
         level="info",
