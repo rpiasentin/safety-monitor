@@ -439,7 +439,12 @@
 }
 
 .property-action-btn:disabled {
-  opacity: 0.45;
+  opacity: 0.18;
+  filter: grayscale(0.9) saturate(0.35);
+  color: rgba(196, 210, 225, 0.46);
+  border-color: rgba(132, 154, 176, 0.18);
+  background: rgba(54, 66, 80, 0.24);
+  box-shadow: none;
   cursor: not-allowed;
 }
 
