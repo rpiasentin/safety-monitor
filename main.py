@@ -855,6 +855,10 @@ async def dashboard(request: Request):
                     "water_exclude_sensors",
                     global_water_cfg.get("exclude_sensors", []),
                 ),
+                "suppress_maker_device_alerts": pcfg.get(
+                    "suppress_maker_device_alerts",
+                    False,
+                ),
             },
         })
 
@@ -1445,6 +1449,10 @@ async def get_thresholds():
                 "water_exclude_sensors",
                 global_water.get("exclude_sensors", []),
             ),
+            "suppress_maker_device_alerts": pcfg.get(
+                "suppress_maker_device_alerts",
+                False,
+            ),
         }
     return JSONResponse(content=result)
 
@@ -1499,7 +1507,8 @@ async def update_thresholds(pid: str, request: Request,
     # Per-alert push toggles
     for key in ("battery_pushover_enabled",
                 "offline_pushover_enabled",
-                "water_pushover_enabled"):
+                "water_pushover_enabled",
+                "suppress_maker_device_alerts"):
         if key in body and body[key] is not None:
             pcfg[key] = _as_bool(body[key])
 

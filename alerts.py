@@ -102,17 +102,23 @@ class AlertProcessor:
         fired = []
         pid = snapshot.get("property_id", "unknown")
         pcfg = property_cfg or {}
+        suppress_maker = bool(pcfg.get("suppress_maker_device_alerts", False))
 
-        if self.cfg.get("temperature", {}).get("enabled", True):
+        if self.cfg.get("temperature", {}).get("enabled", True) and not suppress_maker:
             fired += self._check_temps(pid, snapshot, pcfg)
 
         if self.cfg.get("battery", {}).get("enabled", True):
-            fired += self._check_batteries(pid, snapshot, pcfg)
+            fired += self._check_batteries(
+                pid,
+                snapshot,
+                pcfg,
+                suppress_maker_devices=suppress_maker,
+            )
 
-        if self.cfg.get("water", {}).get("enabled", True):
+        if self.cfg.get("water", {}).get("enabled", True) and not suppress_maker:
             fired += self._check_water_sensors(pid, snapshot, pcfg)
 
-        if self.cfg.get("smoke", {}).get("enabled", True):
+        if self.cfg.get("smoke", {}).get("enabled", True) and not suppress_maker:
             fired += self._check_smoke_sensors(pid, snapshot, pcfg)
 
         if self.cfg.get("offline", {}).get("enabled", True):
@@ -191,7 +197,8 @@ class AlertProcessor:
 
     # ── Battery devices ───────────────────────────────────────────────────────
 
-    def _check_batteries(self, pid: str, snapshot: dict, property_cfg: dict) -> list[dict]:
+    def _check_batteries(self, pid: str, snapshot: dict, property_cfg: dict,
+                         suppress_maker_devices: bool = False) -> list[dict]:
         cfg = self.cfg.get("battery", {})
         low_threshold  = property_cfg.get("battery_low_threshold_percent",
                                           cfg.get("low_threshold_percent", 20))
@@ -224,6 +231,9 @@ class AlertProcessor:
                         db.mark_alert_pushover_sent(alert_id)
                 fired.append({"type": "battery", "sensor": "inverter_soc",
                                "value": soc, "severity": severity})
+
+        if suppress_maker_devices:
+            return fired
 
         # Check Hubitat/HA device batteries
         for device in snapshot.get("battery_devices", []):

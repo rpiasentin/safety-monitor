@@ -79,14 +79,25 @@
 
 #summary-section,
 #alerts-section,
+#alerts-wrapper,
 [id^="prop-"] {
   scroll-margin-top: 92px;
+}
+
+.dashboard-page .monitor-main {
+  padding-top: 0.9rem !important;
+  padding-bottom: 1.15rem !important;
+}
+
+.dashboard-page .monitor-header {
+  padding-top: 0.62rem !important;
+  padding-bottom: 0.62rem !important;
 }
 
 .monitor-hero {
   border: 1px solid rgba(134, 189, 226, 0.25);
   border-radius: var(--radius-lg);
-  padding: 0.95rem;
+  padding: 0.76rem;
   background:
     linear-gradient(140deg, rgba(29, 66, 103, 0.62), rgba(15, 30, 48, 0.84)),
     linear-gradient(180deg, rgba(23, 43, 65, 0.9), rgba(10, 22, 36, 0.94));
@@ -232,6 +243,10 @@
   animation: rise-in 260ms ease both;
 }
 
+.live-refreshing .monitor-card {
+  animation: none !important;
+}
+
 .monitor-subcard {
   border: 1px solid rgba(140, 177, 210, 0.2);
   background: linear-gradient(180deg, rgba(36, 56, 80, 0.65), rgba(21, 37, 56, 0.72));
@@ -357,7 +372,8 @@
 
 .property-body {
   display: grid;
-  gap: 1rem;
+  gap: 0.78rem;
+  padding: 0.92rem !important;
 }
 
 .property-energy-main {
@@ -565,6 +581,31 @@
 .monitor-footer {
   color: #8fa9c3 !important;
   letter-spacing: 0.01em;
+  padding-top: 0.75rem !important;
+  padding-bottom: 0.85rem !important;
+}
+
+#container-health-section,
+#property-grid,
+#alerts-wrapper,
+#settings-panel {
+  margin-bottom: 1rem !important;
+}
+
+.property-grid {
+  gap: 0.95rem !important;
+}
+
+.property-header {
+  padding: 0.74rem 0.92rem !important;
+}
+
+.monitor-settings .monitor-subcard {
+  padding: 0.82rem !important;
+}
+
+.monitor-settings .space-y-3 > * + * {
+  margin-top: 0.62rem !important;
 }
 
 .monitor-nav-link {
@@ -729,7 +770,7 @@
 
 @media (max-width: 860px) {
   .dashboard-page .monitor-main {
-    padding-bottom: calc(8rem + env(safe-area-inset-bottom, 0px)) !important;
+    padding-bottom: calc(6.5rem + env(safe-area-inset-bottom, 0px)) !important;
   }
 
   .monitor-settings-wrap:not(.hidden) {

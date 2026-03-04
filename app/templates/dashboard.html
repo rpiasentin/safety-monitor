@@ -10,7 +10,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Sora:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ request.url_for('static', path='css/monitor-ui.css') }}">
-  <meta http-equiv="refresh" content="60">
   <style>
     .soc-ring { transition: stroke-dashoffset 0.5s ease; }
   </style>
@@ -29,14 +28,14 @@
     <div class="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-300">
       {% set total_alerts = alerts|length %}
       {% if total_alerts > 0 %}
-        <span class="monitor-chip bg-red-600 text-white px-3 py-1 rounded-full font-semibold">
+        <span id="header-alert-chip" class="monitor-chip bg-red-600 text-white px-3 py-1 rounded-full font-semibold">
           ⚠ {{ total_alerts }} alert{{ 's' if total_alerts != 1 }}
         </span>
       {% else %}
-        <span class="monitor-chip bg-green-900 text-green-300 px-3 py-1 rounded-full font-semibold">✓ All clear</span>
+        <span id="header-alert-chip" class="monitor-chip bg-green-900 text-green-300 px-3 py-1 rounded-full font-semibold">✓ All clear</span>
       {% endif %}
       <span id="clock" class="monitor-chip monitor-clock font-mono tabular-nums px-2.5 py-1 rounded-full"></span>
-      <span class="text-gray-600">auto-refresh 60s</span>
+      <span id="live-refresh-status" class="text-gray-600">live update every 60s</span>
       <a href="/decisions"
         class="monitor-button text-gray-200 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-xs sm:text-sm font-medium border border-gray-700 hover:border-gray-500"
         title="Critical system decisions log">Decisions</a>
@@ -153,6 +152,18 @@
                 </button>
               </div>
               <div id="{{ card.id }}_clear_status" class="mt-2 text-xs hidden"></div>
+            </div>
+            <div class="mb-3 rounded-lg border border-gray-700 bg-gray-700/40 p-2">
+              <label class="flex items-center gap-2">
+                <input type="checkbox"
+                  id="{{ card.id }}_suppress_maker_device_alerts"
+                  {% if card.alerts_cfg.suppress_maker_device_alerts %}checked{% endif %}
+                  class="accent-amber-400">
+                <span class="text-xs text-gray-200 font-semibold">Suppress Maker API device alerts</span>
+              </label>
+              <p class="text-[11px] text-gray-400 mt-1">
+                Pauses temperature, Hubitat battery-device, water leak, and smoke/CO alerts sourced from Maker API devices.
+              </p>
             </div>
             <div class="grid grid-cols-2 gap-3 mb-3">
               <label class="block">
@@ -315,7 +326,7 @@
     </div>
 
     {% if container_health %}
-    <div class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden mb-8 monitor-card">
+    <div id="container-health-section" class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden mb-8 monitor-card">
       <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between gap-3">
         <h2 class="text-base font-bold text-white">Container Health</h2>
         <div class="flex items-center gap-2 flex-wrap justify-end">
@@ -391,7 +402,7 @@
     {% endif %}
 
     <!-- Property cards grid -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 property-grid">
+    <div id="property-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 property-grid">
       {% for card in cards %}
       <div id="prop-{{ card.id }}" class="bg-gray-900 rounded-2xl border {% if card.alert_count > 0 %}border-red-700{% else %}border-gray-800{% endif %} overflow-hidden monitor-card property-card">
 
@@ -805,66 +816,72 @@
     </div><!-- /grid -->
 
     <!-- Recent alerts -->
-    {% if alerts %}
-    <div id="alerts-section" class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden monitor-card monitor-alerts">
-      <div class="px-5 py-4 border-b border-gray-800">
-        <h2 class="text-base font-bold text-white">Alerts (active safety + recent)</h2>
-      </div>
-      <div class="divide-y divide-gray-800">
-        {% for alert in alerts %}
-        <div id="alert-row-{{ alert.id }}" class="px-5 py-3 flex items-start gap-3 alert-row">
-          <span class="flex-shrink-0 mt-0.5
-            {% if alert.severity == 'critical' %}text-red-400
-            {% else %}text-yellow-400{% endif %}">
-            {% if alert.alert_type == 'temperature' %}🌡
-            {% elif alert.alert_type == 'battery' %}🔋
-            {% elif alert.alert_type == 'offline' %}📡
-            {% elif alert.alert_type == 'water' %}💧
-            {% elif alert.alert_type == 'smoke' %}🚨
-            {% else %}⚠{% endif %}
-          </span>
-          <div class="flex-1 min-w-0">
-            <p class="text-sm text-gray-200">{{ alert.message }}</p>
-            <p class="text-xs text-gray-500 mt-0.5">
-              {{ ago(alert.triggered_at) }}
-              {% if alert.pushover_sent %} · pushed{% endif %}
-              {% if alert.alert_type == 'water' and not alert.resolved_at %} · latched until cleared{% endif %}
-              {% if alert.alert_type == 'smoke' and not alert.resolved_at %} · active until clear/ack{% endif %}
-            </p>
-          </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            {% if (alert.repeat_count or 1) > 1 %}
-            <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-700 border border-gray-600 text-gray-200">
-              ×{{ alert.repeat_count }}
-            </span>
-            {% endif %}
-            <span class="text-xs font-mono text-gray-600">{{ alert.property_id }}</span>
-            {% if alert.alert_type == 'water' and not alert.resolved_at %}
-            <button onclick="clearWaterAlert({{ alert.id }})"
-                    class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600 alert-clear-btn">
-              Clear
-            </button>
-            {% endif %}
-          </div>
+    <section id="alerts-wrapper">
+      {% if alerts %}
+      <div id="alerts-section" class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden monitor-card monitor-alerts">
+        <div class="px-5 py-4 border-b border-gray-800">
+          <h2 class="text-base font-bold text-white">Alerts (active safety + recent)</h2>
         </div>
-        {% endfor %}
+        <div class="divide-y divide-gray-800">
+          {% for alert in alerts %}
+          <div id="alert-row-{{ alert.id }}" class="px-5 py-3 flex items-start gap-3 alert-row">
+            <span class="flex-shrink-0 mt-0.5
+              {% if alert.severity == 'critical' %}text-red-400
+              {% else %}text-yellow-400{% endif %}">
+              {% if alert.alert_type == 'temperature' %}🌡
+              {% elif alert.alert_type == 'battery' %}🔋
+              {% elif alert.alert_type == 'offline' %}📡
+              {% elif alert.alert_type == 'water' %}💧
+              {% elif alert.alert_type == 'smoke' %}🚨
+              {% else %}⚠{% endif %}
+            </span>
+            <div class="flex-1 min-w-0">
+              <p class="text-sm text-gray-200">{{ alert.message }}</p>
+              <p class="text-xs text-gray-500 mt-0.5">
+                {{ ago(alert.triggered_at) }}
+                {% if alert.pushover_sent %} · pushed{% endif %}
+                {% if alert.alert_type == 'water' and not alert.resolved_at %} · latched until cleared{% endif %}
+                {% if alert.alert_type == 'smoke' and not alert.resolved_at %} · active until clear/ack{% endif %}
+              </p>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              {% if (alert.repeat_count or 1) > 1 %}
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-full bg-gray-700 border border-gray-600 text-gray-200">
+                ×{{ alert.repeat_count }}
+              </span>
+              {% endif %}
+              <span class="text-xs font-mono text-gray-600">{{ alert.property_id }}</span>
+              {% if alert.alert_type == 'water' and not alert.resolved_at %}
+              <button onclick="clearWaterAlert({{ alert.id }})"
+                      class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600 alert-clear-btn">
+                Clear
+              </button>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
       </div>
-    </div>
-    {% endif %}
+      {% else %}
+      <div id="alerts-section" class="bg-gray-900/50 rounded-2xl border border-gray-800 overflow-hidden monitor-card monitor-alerts">
+        <div class="px-5 py-3 text-sm text-gray-400">No active alerts in the current window.</div>
+      </div>
+      {% endif %}
+    </section>
 
   </main>
 
   <nav class="mobile-thumb-dock" aria-label="Quick Actions">
     <button class="thumb-dock-btn" onclick="toggleSettings()">Alert Rules</button>
     <a class="thumb-dock-btn" href="#summary-section">Summary</a>
-    <a class="thumb-dock-btn" href="{% if alerts %}#alerts-section{% else %}#summary-section{% endif %}">Alerts</a>
+    <a class="thumb-dock-btn" href="#alerts-wrapper">Alerts</a>
     <a class="thumb-dock-btn" href="/decisions">Decisions</a>
     <a class="thumb-dock-btn" href="#dashboard-top">Top</a>
   </nav>
 
   <!-- Footer -->
   <footer class="monitor-footer text-center py-6 text-xs">
-    {{ app_title }} · Tailscale-accessible · data refreshes every 15 min · page auto-refreshes every 60s
+    {{ app_title }} · Tailscale-accessible · data refreshes every 15 min · live UI updates every 60s
   </footer>
 
   <script>
@@ -876,6 +893,114 @@
     }
     updateClock();
     setInterval(updateClock, 1000);
+
+    const AUTO_REFRESH_MS = 60_000;
+    let refreshInFlight = false;
+    let refreshQueued = false;
+
+    function isSettingsOpen() {
+      const panel = document.getElementById('settings-panel');
+      return !!panel && !panel.classList.contains('hidden');
+    }
+
+    function setRefreshStatus(message, tone = 'muted') {
+      const el = document.getElementById('live-refresh-status');
+      if (!el) return;
+      el.textContent = message;
+      el.classList.remove('text-gray-600', 'text-yellow-300', 'text-green-300', 'text-red-400');
+      if (tone === 'warning') {
+        el.classList.add('text-yellow-300');
+      } else if (tone === 'good') {
+        el.classList.add('text-green-300');
+      } else if (tone === 'error') {
+        el.classList.add('text-red-400');
+      } else {
+        el.classList.add('text-gray-600');
+      }
+    }
+
+    function replaceSectionFromDoc(selector, nextDoc) {
+      const current = document.querySelector(selector);
+      const next = nextDoc.querySelector(selector);
+      if (current && next) {
+        current.replaceWith(next);
+        return;
+      }
+      if (current && !next) {
+        current.remove();
+        return;
+      }
+      if (!current && next) {
+        const main = document.querySelector('main.monitor-main');
+        if (main) {
+          main.appendChild(next);
+        }
+      }
+    }
+
+    async function refreshDashboard(reason = 'timer', force = false) {
+      if (refreshInFlight) {
+        refreshQueued = true;
+        return;
+      }
+      if (!force && isSettingsOpen()) {
+        refreshQueued = true;
+        setRefreshStatus('live update paused while editing', 'warning');
+        return;
+      }
+
+      const activeTag = document.activeElement?.tagName || '';
+      if (!force && ['INPUT', 'SELECT', 'TEXTAREA'].includes(activeTag)) {
+        refreshQueued = true;
+        setRefreshStatus('live update paused while typing', 'warning');
+        return;
+      }
+
+      refreshQueued = false;
+      refreshInFlight = true;
+      setRefreshStatus(reason === 'timer' ? 'syncing live data…' : 'updating…', 'muted');
+      try {
+        const resp = await fetch(`/?_refresh=${Date.now()}`, {
+          method: 'GET',
+          cache: 'no-store',
+          headers: { 'X-Requested-With': 'dashboard-soft-refresh' },
+        });
+        if (!resp.ok) throw new Error(`refresh failed (${resp.status})`);
+        const html = await resp.text();
+        const nextDoc = new DOMParser().parseFromString(html, 'text/html');
+        document.body.classList.add('live-refreshing');
+        replaceSectionFromDoc('#header-alert-chip', nextDoc);
+        replaceSectionFromDoc('#summary-section', nextDoc);
+        replaceSectionFromDoc('#container-health-section', nextDoc);
+        replaceSectionFromDoc('#property-grid', nextDoc);
+        replaceSectionFromDoc('#alerts-wrapper', nextDoc);
+        const stamp = new Date().toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+        setRefreshStatus(`updated ${stamp}`, 'good');
+      } catch (e) {
+        setRefreshStatus(`update failed: ${e.message}`, 'error');
+      } finally {
+        refreshInFlight = false;
+        document.body.classList.remove('live-refreshing');
+        if (refreshQueued && !isSettingsOpen()) {
+          refreshQueued = false;
+          setTimeout(() => refreshDashboard('queued', true), 200);
+        }
+      }
+    }
+
+    function queueDashboardRefresh(reason = 'action') {
+      refreshQueued = true;
+      setTimeout(() => refreshDashboard(reason), 150);
+    }
+
+    setInterval(() => refreshDashboard('timer'), AUTO_REFRESH_MS);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) queueDashboardRefresh('resume');
+    });
 
     // Load sensor classification table for a property
     async function loadSensors(pid) {
@@ -941,6 +1066,11 @@
         {% for card in cards %}loadSensors('{{ card.id }}');
         {% endfor %}
         setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+        setRefreshStatus('live update paused while editing', 'warning');
+      } else if (refreshQueued) {
+        queueDashboardRefresh('settings-closed');
+      } else {
+        setRefreshStatus('live update every 60s', 'muted');
       }
     }
 
@@ -1035,7 +1165,7 @@
             statusEl.classList.replace('text-gray-400', 'text-green-400');
           }
         }
-        setTimeout(() => window.location.reload(), warning ? 2200 : 900);
+        setTimeout(() => queueDashboardRefresh('lock-action'), warning ? 1800 : 700);
       } catch (e) {
         if (statusEl) {
           statusEl.textContent = `✗ ${e.message}`;
@@ -1093,7 +1223,7 @@
               : `✓ Muted for ${data.minutes || minutes || 60}m`;
           statusEl.classList.replace('text-gray-400', 'text-green-400');
         }
-        setTimeout(() => window.location.reload(), 900);
+        setTimeout(() => queueDashboardRefresh('smoke-action'), 700);
       } catch (e) {
         if (statusEl) {
           statusEl.textContent = `✗ ${e.message}`;
@@ -1134,7 +1264,7 @@
           statusEl.textContent = `✓ Cleared ${n} alert${n === 1 ? '' : 's'}`;
           statusEl.classList.replace('text-gray-400', 'text-green-400');
         }
-        window.location.reload();
+        queueDashboardRefresh('alerts-cleared');
       } catch (e) {
         if (statusEl) {
           statusEl.textContent = `✗ ${e.message}`;
@@ -1156,7 +1286,7 @@
         const row = document.getElementById(`alert-row-${alertId}`);
         if (row) row.remove();
         // Keep summary and card counts consistent after clear.
-        window.location.reload();
+        queueDashboardRefresh('water-cleared');
       } catch (e) {
         alert(`Clear failed: ${e.message}`);
       }
@@ -1197,6 +1327,7 @@
         offline_pushover_enabled:           cb('offline_pushover_enabled'),
         water_pushover_enabled:             cb('water_pushover_enabled'),
         water_exclude_sensors:              csv('water_exclude_sensors'),
+        suppress_maker_device_alerts:       cb('suppress_maker_device_alerts'),
       };
 
       const statusEl = document.getElementById(`${pid}_status`);
