@@ -357,6 +357,74 @@ def _parse_raw_payload(row: dict | None) -> dict:
         return {}
 
 
+def _maker_device_activity(last_activity: str | None,
+                           collected_at: str | None) -> dict:
+    """Return traffic-light activity status using 5/10 minute thresholds."""
+    ts = _parse_timestamp_utc(last_activity) or _parse_timestamp_utc(collected_at)
+    if not ts:
+        return {
+            "status": "critical",
+            "last_activity": "not responding",
+            "activity_at": None,
+        }
+
+    age_seconds = max(0, int((datetime.now(timezone.utc) - ts).total_seconds()))
+    age_minutes = age_seconds / 60.0
+    if age_minutes <= 5:
+        status = "good"
+    elif age_minutes <= 10:
+        status = "warning"
+    else:
+        status = "critical"
+
+    if age_seconds < 60:
+        last_activity_text = "just now"
+    elif age_seconds < 3600:
+        last_activity_text = f"{age_seconds // 60}m ago"
+    elif age_seconds < 86400:
+        last_activity_text = f"{age_seconds // 3600}h ago"
+    else:
+        last_activity_text = f"{age_seconds // 86400}d ago"
+
+    return {
+        "status": status,
+        "last_activity": last_activity_text,
+        "activity_at": ts.isoformat(),
+    }
+
+
+def _maker_device_roles(property_id: str) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """
+    Build best-effort role maps from latest Hubitat collector payload:
+      by device_id and by friendly_name(lowercase).
+    """
+    source_row = db.get_latest_reading(property_id, source="hubitat_cloud")
+    payload = _parse_raw_payload(source_row)
+    roles_by_id: dict[str, set[str]] = {}
+    roles_by_name: dict[str, set[str]] = {}
+
+    def _add(role: str, rows: list[dict]) -> None:
+        for row in (rows or []):
+            did = str(row.get("entity_id") or "").strip()
+            name = str(row.get("friendly_name") or "").strip()
+            if did:
+                roles_by_id.setdefault(did, set()).add(role)
+            if name:
+                roles_by_name.setdefault(name.lower(), set()).add(role)
+
+    # Temperature list is keyed by friendly label in the Maker payload.
+    for sensor_name in (payload.get("temperatures") or {}).keys():
+        name = str(sensor_name or "").strip()
+        if name:
+            roles_by_name.setdefault(name.lower(), set()).add("temperature")
+
+    _add("battery", list(payload.get("battery_devices") or []))
+    _add("water", list(payload.get("water_sensors") or []))
+    _add("smoke", list(payload.get("smoke_devices") or []))
+    _add("lock", list(payload.get("lock_devices") or []))
+    return roles_by_id, roles_by_name
+
+
 def _get_property_cfg(property_id: str) -> dict | None:
     return next(
         (p for p in CONFIG.get("properties", []) if p.get("id") == property_id),
@@ -859,6 +927,10 @@ async def dashboard(request: Request):
                     "suppress_maker_device_alerts",
                     False,
                 ),
+                "suppress_maker_devices": pcfg.get(
+                    "suppress_maker_devices",
+                    [],
+                ),
             },
         })
 
@@ -1080,6 +1152,54 @@ async def api_property(property_id: str):
         "devices": devices,
         "alerts":  p_alerts,
     })
+
+
+@app.get("/api/property/{property_id}/maker-devices")
+async def api_property_maker_devices(property_id: str):
+    """
+    List Maker API (Hubitat) devices known for a property, including
+    per-device activity status and inferred alert roles.
+    """
+    prop = _get_property_cfg(property_id)
+    if not prop:
+        return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+
+    pcfg = prop.get("alerts", {})
+    suppressed = {
+        str(v).strip().lower()
+        for v in (pcfg.get("suppress_maker_devices") or [])
+        if str(v).strip()
+    }
+    roles_by_id, roles_by_name = _maker_device_roles(property_id)
+
+    devices = []
+    for row in db.get_hubitat_devices(property_id):
+        device_id = str(row.get("entity_id") or "").strip()
+        friendly_name = str(row.get("friendly_name") or device_id or "").strip()
+        role_set = set(roles_by_id.get(device_id) or [])
+        role_set.update(roles_by_name.get(friendly_name.lower()) or set())
+        activity = _maker_device_activity(
+            row.get("last_activity"),
+            row.get("collected_at"),
+        )
+        devices.append({
+            "entity_id": device_id,
+            "friendly_name": friendly_name,
+            "device_type": str(row.get("device_type") or "").strip(),
+            "battery_pct": row.get("battery_pct"),
+            "last_activity": row.get("last_activity"),
+            "collected_at": row.get("collected_at"),
+            "activity_status": activity.get("status"),
+            "activity_display": activity.get("last_activity"),
+            "roles": sorted(role_set),
+            "suppressed": (
+                device_id.lower() in suppressed
+                or friendly_name.lower() in suppressed
+            ),
+        })
+
+    devices.sort(key=lambda d: (str(d.get("friendly_name") or "").lower(), str(d.get("entity_id") or "")))
+    return JSONResponse(content={"property_id": property_id, "devices": devices})
 
 
 @app.get("/api/history/{property_id}")
@@ -1453,6 +1573,10 @@ async def get_thresholds():
                 "suppress_maker_device_alerts",
                 False,
             ),
+            "suppress_maker_devices": pcfg.get(
+                "suppress_maker_devices",
+                [],
+            ),
         }
     return JSONResponse(content=result)
 
@@ -1497,7 +1621,8 @@ async def update_thresholds(pid: str, request: Request,
 
     # Sensor lists (accept comma-separated string or list)
     for key in ("outdoor_sensors", "exclude_sensors",
-                "battery_exclude_devices", "water_exclude_sensors"):
+                "battery_exclude_devices", "water_exclude_sensors",
+                "suppress_maker_devices"):
         if key in body:
             val = body[key]
             if isinstance(val, str):

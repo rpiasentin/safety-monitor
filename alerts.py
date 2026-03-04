@@ -93,6 +93,61 @@ class AlertProcessor:
     def __init__(self, alert_cfg: dict):
         self.cfg = alert_cfg
 
+    @staticmethod
+    def _norm_key(value) -> str:
+        return str(value or "").strip().lower()
+
+    def _suppressed_maker_keys(self, property_cfg: dict) -> set[str]:
+        raw = property_cfg.get("suppress_maker_devices", []) or []
+        out = set()
+        for item in raw:
+            key = self._norm_key(item)
+            if key:
+                out.add(key)
+        return out
+
+    def _maker_context(self, snapshot: dict) -> dict:
+        maker_ids: set[str] = set()
+        maker_names: set[str] = set()
+        maker_name_to_id: dict[str, str] = {}
+        for device in (snapshot.get("maker_devices") or []):
+            did = self._norm_key(device.get("entity_id"))
+            name = self._norm_key(device.get("friendly_name"))
+            if did:
+                maker_ids.add(did)
+            if name:
+                maker_names.add(name)
+                if did and name not in maker_name_to_id:
+                    maker_name_to_id[name] = did
+        maker_temp_names = {
+            self._norm_key(name)
+            for name in (snapshot.get("maker_temperature_names") or [])
+            if self._norm_key(name)
+        }
+        return {
+            "ids": maker_ids,
+            "names": maker_names,
+            "name_to_id": maker_name_to_id,
+            "temp_names": maker_temp_names,
+        }
+
+    def _is_maker_device(self, entity_id: str, friendly_name: str, maker_ctx: dict) -> bool:
+        did = self._norm_key(entity_id)
+        name = self._norm_key(friendly_name)
+        return bool(
+            (did and did in maker_ctx.get("ids", set()))
+            or (name and name in maker_ctx.get("names", set()))
+        )
+
+    def _is_suppressed_maker(self, entity_id: str, friendly_name: str,
+                             suppressed_keys: set[str]) -> bool:
+        did = self._norm_key(entity_id)
+        name = self._norm_key(friendly_name)
+        return bool(
+            (did and did in suppressed_keys)
+            or (name and name in suppressed_keys)
+        )
+
     def process(self, snapshot: dict, property_cfg: dict | None = None) -> list[dict]:
         """
         Run all checks against a PropertyCollector snapshot.
@@ -104,8 +159,13 @@ class AlertProcessor:
         pcfg = property_cfg or {}
         suppress_maker = bool(pcfg.get("suppress_maker_device_alerts", False))
 
-        if self.cfg.get("temperature", {}).get("enabled", True) and not suppress_maker:
-            fired += self._check_temps(pid, snapshot, pcfg)
+        if self.cfg.get("temperature", {}).get("enabled", True):
+            fired += self._check_temps(
+                pid,
+                snapshot,
+                pcfg,
+                suppress_maker_devices=suppress_maker,
+            )
 
         if self.cfg.get("battery", {}).get("enabled", True):
             fired += self._check_batteries(
@@ -115,11 +175,21 @@ class AlertProcessor:
                 suppress_maker_devices=suppress_maker,
             )
 
-        if self.cfg.get("water", {}).get("enabled", True) and not suppress_maker:
-            fired += self._check_water_sensors(pid, snapshot, pcfg)
+        if self.cfg.get("water", {}).get("enabled", True):
+            fired += self._check_water_sensors(
+                pid,
+                snapshot,
+                pcfg,
+                suppress_maker_devices=suppress_maker,
+            )
 
-        if self.cfg.get("smoke", {}).get("enabled", True) and not suppress_maker:
-            fired += self._check_smoke_sensors(pid, snapshot, pcfg)
+        if self.cfg.get("smoke", {}).get("enabled", True):
+            fired += self._check_smoke_sensors(
+                pid,
+                snapshot,
+                pcfg,
+                suppress_maker_devices=suppress_maker,
+            )
 
         if self.cfg.get("offline", {}).get("enabled", True):
             fired += self._check_offline(pid, snapshot, pcfg)
@@ -128,7 +198,8 @@ class AlertProcessor:
 
     # ── Temperature ───────────────────────────────────────────────────────────
 
-    def _check_temps(self, pid: str, snapshot: dict, property_cfg: dict) -> list[dict]:
+    def _check_temps(self, pid: str, snapshot: dict, property_cfg: dict,
+                     suppress_maker_devices: bool = False) -> list[dict]:
         cfg = self.cfg.get("temperature", {})
         cooldown = cfg.get("cooldown_minutes", 60)
         use_push = cfg.get("pushover_enabled", True)
@@ -143,6 +214,8 @@ class AlertProcessor:
 
         exclude  = {s.lower() for s in property_cfg.get("exclude_sensors", [])}
         outdoors = {s.lower() for s in property_cfg.get("outdoor_sensors", [])}
+        maker_ctx = self._maker_context(snapshot)
+        suppressed_maker = self._suppressed_maker_keys(property_cfg)
 
         fired = []
         all_temps: dict = dict(snapshot.get("all_temps") or {})
@@ -152,15 +225,25 @@ class AlertProcessor:
             all_temps["primary"] = primary
 
         for sensor_id, temp_f in all_temps.items():
+            sensor_key = self._norm_key(sensor_id)
+            if sensor_key in maker_ctx.get("temp_names", set()):
+                linked_id = maker_ctx.get("name_to_id", {}).get(sensor_key, "")
+                if (
+                    suppress_maker_devices
+                    or sensor_key in suppressed_maker
+                    or (linked_id and linked_id in suppressed_maker)
+                ):
+                    continue
+
             # Skip excluded (virtual/dead) sensors
-            if sensor_id.lower() in exclude:
+            if sensor_key in exclude:
                 continue
 
             # Skip obviously invalid readings (e.g. virtual device stuck at 0.0°F)
             if temp_f == INVALID_TEMP_F:
                 continue
 
-            is_outdoor = sensor_id.lower() in outdoors
+            is_outdoor = sensor_key in outdoors
             threshold  = outdoor_warn if is_outdoor else indoor_warn
             critical   = outdoor_crit if is_outdoor else indoor_crit
 
@@ -211,6 +294,8 @@ class AlertProcessor:
         excludes_src   = property_cfg.get("battery_exclude_devices",
                                           cfg.get("exclude_devices", []))
         excludes       = [str(x).lower() for x in (excludes_src or [])]
+        maker_ctx = self._maker_context(snapshot)
+        suppressed_maker = self._suppressed_maker_keys(property_cfg)
         fired = []
 
         # Check inverter SOC first
@@ -232,14 +317,14 @@ class AlertProcessor:
                 fired.append({"type": "battery", "sensor": "inverter_soc",
                                "value": soc, "severity": severity})
 
-        if suppress_maker_devices:
-            return fired
-
         # Check Hubitat/HA device batteries
         for device in snapshot.get("battery_devices", []):
             name = device.get("friendly_name", device.get("entity_id", ""))
             pct  = device.get("battery_pct")
             eid  = device.get("entity_id", name)
+            if self._is_maker_device(eid, name, maker_ctx):
+                if suppress_maker_devices or self._is_suppressed_maker(eid, name, suppressed_maker):
+                    continue
             if name.lower() in excludes or eid.lower() in excludes:
                 continue
             if pct is None or pct >= low_threshold:
@@ -266,22 +351,29 @@ class AlertProcessor:
     # ── Water leak sensors (latched) ──────────────────────────────────────────
 
     def _check_water_sensors(self, pid: str, snapshot: dict,
-                              property_cfg: dict) -> list[dict]:
+                              property_cfg: dict,
+                              suppress_maker_devices: bool = False) -> list[dict]:
         cfg = self.cfg.get("water", {})
         use_push = property_cfg.get("water_pushover_enabled",
                                     cfg.get("pushover_enabled", True))
         excludes_src = property_cfg.get("water_exclude_sensors",
                                         cfg.get("exclude_sensors", []))
         excludes = {str(x).lower() for x in (excludes_src or [])}
+        maker_ctx = self._maker_context(snapshot)
+        suppressed_maker = self._suppressed_maker_keys(property_cfg)
         fired = []
 
         for sensor in snapshot.get("water_sensors", []):
+            sensor_id = str(sensor.get("entity_id") or sensor.get("friendly_name") or "")
+            name = sensor.get("friendly_name") or sensor_id or "Unknown sensor"
+            if self._is_maker_device(sensor_id, name, maker_ctx):
+                if suppress_maker_devices or self._is_suppressed_maker(sensor_id, name, suppressed_maker):
+                    continue
+
             state = str(sensor.get("state") or "").strip().lower()
             if state != "wet":
                 continue
 
-            sensor_id = str(sensor.get("entity_id") or sensor.get("friendly_name") or "")
-            name = sensor.get("friendly_name") or sensor_id or "Unknown sensor"
             if not sensor_id:
                 continue
             if sensor_id.lower() in excludes or name.lower() in excludes:
@@ -336,7 +428,8 @@ class AlertProcessor:
             return None
 
     def _check_smoke_sensors(self, pid: str, snapshot: dict,
-                             property_cfg: dict) -> list[dict]:
+                             property_cfg: dict,
+                             suppress_maker_devices: bool = False) -> list[dict]:
         cfg = self.cfg.get("smoke", {})
         sustain_minutes = int(property_cfg.get("smoke_sustain_minutes",
                                                cfg.get("sustain_minutes", 3)))
@@ -352,12 +445,15 @@ class AlertProcessor:
         now_ts = now.strftime("%Y-%m-%d %H:%M:%S")
         fired = []
         state_map = db.get_smoke_sensor_state_map(pid)
+        suppressed_maker = self._suppressed_maker_keys(property_cfg)
 
         for sensor in snapshot.get("smoke_devices", []):
             sensor_id = str(sensor.get("entity_id") or sensor.get("friendly_name") or "").strip()
             if not sensor_id:
                 continue
             name = str(sensor.get("friendly_name") or sensor_id).strip()
+            if suppress_maker_devices or self._is_suppressed_maker(sensor_id, name, suppressed_maker):
+                continue
             state = str(sensor.get("state") or "unknown").strip().lower()
             status = str(sensor.get("status") or "unknown").strip().lower()
 

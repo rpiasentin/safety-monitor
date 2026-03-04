@@ -167,11 +167,36 @@
                   id="{{ card.id }}_suppress_maker_device_alerts"
                   {% if card.alerts_cfg.suppress_maker_device_alerts %}checked{% endif %}
                   class="accent-amber-400">
-                <span class="text-xs text-gray-200 font-semibold">Suppress Maker API device alerts</span>
+                <span class="text-xs text-gray-200 font-semibold">Suppress all Maker API alerts</span>
               </label>
               <p class="text-[11px] text-gray-400 mt-1">
-                Pauses temperature, Hubitat battery-device, water leak, and smoke/CO alerts sourced from Maker API devices.
+                Global override for this property. When enabled, all Maker API device alerts are paused.
               </p>
+            </div>
+            <div class="mb-3 rounded-lg border border-gray-700 bg-gray-700/40 p-2">
+              <div class="flex items-center justify-between gap-2 mb-1">
+                <p class="text-xs text-gray-200 font-semibold">Maker API Device Alert Suppression</p>
+                <div class="flex items-center gap-2">
+                  <button type="button"
+                    onclick="setMakerDeviceSuppression('{{ card.id }}', true)"
+                    class="text-[11px] px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-amber-50 border border-amber-600">
+                    Suppress all
+                  </button>
+                  <button type="button"
+                    onclick="setMakerDeviceSuppression('{{ card.id }}', false)"
+                    class="text-[11px] px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">
+                    Clear all
+                  </button>
+                </div>
+              </div>
+              <p class="text-[11px] text-gray-400 mb-2">
+                Device-level suppression list for Maker API devices. This is separate from Indoor/Outdoor/Skip temperature classification.
+              </p>
+              <div id="{{ card.id }}_maker_device_list"
+                data-suppressed='{{ card.alerts_cfg.suppress_maker_devices | tojson }}'
+                class="space-y-0.5 max-h-56 overflow-y-auto rounded-lg bg-gray-700 border border-gray-600 p-2">
+                <p class="text-xs text-gray-500 italic py-2 text-center">Click ⚙ Alert Rules to load Maker devices…</p>
+              </div>
             </div>
             <div class="grid grid-cols-2 gap-3 mb-3">
               <label class="block">
@@ -871,6 +896,37 @@
       }
     }
 
+    function escapeHtml(value) {
+      const text = String(value ?? '');
+      return text
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function makerRoleBadge(role) {
+      const key = String(role || '').toLowerCase();
+      const roleMap = {
+        temperature: 'Temp',
+        battery: 'Battery',
+        water: 'Water',
+        smoke: 'Smoke',
+        lock: 'Lock',
+      };
+      const label = roleMap[key] || role;
+      return `<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] bg-gray-800 border border-gray-600 text-gray-300">${escapeHtml(label)}</span>`;
+    }
+
+    function setMakerDeviceSuppression(pid, suppress) {
+      const container = document.getElementById(`${pid}_maker_device_list`);
+      if (!container) return;
+      container.querySelectorAll('input[type="checkbox"][data-device-id]').forEach(cb => {
+        cb.checked = !!suppress;
+      });
+    }
+
     function replaceSectionFromDoc(selector, nextDoc) {
       const current = document.querySelector(selector);
       const next = nextDoc.querySelector(selector);
@@ -963,6 +1019,61 @@
       if (!document.hidden) queueDashboardRefresh('resume', false);
     });
 
+    async function loadMakerDevices(pid) {
+      const container = document.getElementById(`${pid}_maker_device_list`);
+      if (!container) return;
+      const suppressed = new Set(
+        JSON.parse(container.dataset.suppressed || '[]')
+          .map(v => String(v || '').toLowerCase())
+          .filter(Boolean)
+      );
+
+      container.innerHTML = '<p class="text-xs text-gray-500 italic py-2 text-center">Loading Maker devices…</p>';
+      try {
+        const resp = await fetch(`/api/property/${pid}/maker-devices`);
+        const data = await resp.json();
+        const devices = data.devices || [];
+        if (!devices.length) {
+          container.innerHTML = '<p class="text-xs text-gray-500 italic py-2 text-center">No Maker devices found yet — run a collection first</p>';
+          return;
+        }
+
+        let html = `<div class="grid grid-cols-[34px,1fr,76px] text-xs text-gray-500 px-1 pb-1 border-b border-gray-600 mb-1">
+          <span class="text-center">Mute</span>
+          <span>Device</span>
+          <span class="text-right">Activity</span>
+        </div>`;
+        devices.forEach(device => {
+          const entityId = String(device.entity_id || '').trim();
+          const friendlyName = String(device.friendly_name || entityId || 'Unknown device').trim();
+          const status = String(device.activity_status || 'critical').toLowerCase();
+          const statusClass = status === 'good'
+            ? 'text-green-300'
+            : status === 'warning'
+              ? 'text-yellow-300'
+              : 'text-red-300';
+          const activity = String(device.activity_display || 'not responding');
+          const roles = Array.isArray(device.roles) ? device.roles : [];
+          const checked = !!device.suppressed
+            || suppressed.has(entityId.toLowerCase())
+            || suppressed.has(friendlyName.toLowerCase());
+          html += `<label class="grid grid-cols-[34px,1fr,76px] items-center gap-2 px-1 py-1 rounded hover:bg-gray-600/70">
+            <input type="checkbox" class="mx-auto accent-amber-400 cursor-pointer" data-device-id="${escapeHtml(entityId)}" ${checked ? 'checked' : ''}>
+            <div class="min-w-0">
+              <div class="text-xs text-gray-100 truncate" title="${escapeHtml(friendlyName)}">${escapeHtml(friendlyName)}</div>
+              <div class="mt-0.5 flex items-center gap-1 flex-wrap">
+                ${(roles.length ? roles.map(makerRoleBadge).join('') : '<span class="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] bg-gray-800 border border-gray-600 text-gray-500">Unclassified</span>')}
+              </div>
+            </div>
+            <span class="text-[11px] text-right ${statusClass}" title="${escapeHtml(device.last_activity || 'not responding')}">${escapeHtml(activity)}</span>
+          </label>`;
+        });
+        container.innerHTML = html;
+      } catch (e) {
+        container.innerHTML = `<p class="text-xs text-red-400 py-2 text-center">Error: ${escapeHtml(e.message)}</p>`;
+      }
+    }
+
     // Load sensor classification table for a property
     async function loadSensors(pid) {
       const container = document.getElementById(`${pid}_sensor_list`);
@@ -1025,6 +1136,7 @@
       if (!shown) {
         // Load sensor lists for all properties
         {% for card in cards %}loadSensors('{{ card.id }}');
+        loadMakerDevices('{{ card.id }}');
         {% endfor %}
         setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
         setRefreshStatus('live update paused while editing', 'warning');
@@ -1267,6 +1379,11 @@
         if (val === 'outdoor') outdoor.push(name);
         if (val === 'exclude') exclude.push(name);
       });
+      const suppressMakerDevices = [];
+      document.querySelectorAll(`#${pid}_maker_device_list input[type="checkbox"][data-device-id]:checked`).forEach(cbEl => {
+        const deviceId = String(cbEl.dataset.deviceId || '').trim();
+        if (deviceId) suppressMakerDevices.push(deviceId);
+      });
 
       const primarySensor = document.getElementById(`${pid}_primary_sensor`)?.value || '';
       const payload = {
@@ -1289,6 +1406,7 @@
         water_pushover_enabled:             cb('water_pushover_enabled'),
         water_exclude_sensors:              csv('water_exclude_sensors'),
         suppress_maker_device_alerts:       cb('suppress_maker_device_alerts'),
+        suppress_maker_devices:             suppressMakerDevices,
       };
 
       const statusEl = document.getElementById(`${pid}_status`);
@@ -1310,6 +1428,8 @@
             container.dataset.outdoor = JSON.stringify(outdoor);
             container.dataset.exclude = JSON.stringify(exclude);
           }
+          const makerContainer = document.getElementById(`${pid}_maker_device_list`);
+          if (makerContainer) makerContainer.dataset.suppressed = JSON.stringify(suppressMakerDevices);
           const selEl = document.getElementById(`${pid}_primary_sensor`);
           if (selEl) selEl.dataset.current = primarySensor;
         } else {

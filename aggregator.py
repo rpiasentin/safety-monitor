@@ -334,6 +334,9 @@ def _rollup(sources: dict) -> dict:
     # Property security/safety rollups (currently from Hubitat cloud feeds)
     out["lock_devices"] = list(hub.get("lock_devices") or [])
     out["smoke_devices"] = list(hub.get("smoke_devices") or [])
+    # Maker API inventory for per-device suppression and Rules UI controls.
+    out["maker_devices"] = list(hub.get("all_devices") or [])
+    out["maker_temperature_names"] = list((hub.get("temperatures") or {}).keys())
 
     # Tesla (only from ha_api, High Country)
     out["tesla"] = ha.get("tesla")
