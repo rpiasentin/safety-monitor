@@ -116,7 +116,7 @@ class HAClient:
           Expects entities like:
             sensor.{prefix}_charge            — battery SOC %
             sensor.{prefix}_solar_power       — solar generation kW
-            sensor.{prefix}_battery_power     — battery kW (+ charging, - discharging)
+            sensor.{prefix}_battery_power     — battery kW (HA Tesla: + discharging, - charging)
             sensor.{prefix}_site_power        — grid kW (- exporting)
             sensor.{prefix}_load_power        — home consumption kW
             sensor.{prefix}_backup_reserve    — backup reserve %
@@ -143,7 +143,11 @@ class HAClient:
             out["grid_online"] = grid_s["state"] == "on"
         if not out:
             return None
-        battery_power = out.get("battery_power", 0)
+        # Normalize to Safety Monitor convention:
+        #   positive => charging, negative => discharging
+        # Home Assistant Tesla energy entity uses the opposite sign.
+        raw_battery_power = out.get("battery_power", 0)
+        battery_power = -raw_battery_power
         return {
             "soc_percent":        out.get("soc"),
             "solar_power_kw":     round(out.get("solar_power", 0), 3),

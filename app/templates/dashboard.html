@@ -643,9 +643,10 @@
           {% if card.lock_devices or card.smoke_devices %}
           <div>
             <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">Property Safety</p>
+            <div class="property-safety-grid {% if card.lock_devices and card.smoke_devices %}two-up{% endif %}">
 
             {% if card.lock_devices %}
-            <div class="property-safety-panel mb-3">
+            <div class="property-safety-panel">
               <div class="property-safety-head">
                 <span class="property-safety-title">Locks</span>
                 <span class="property-safety-meta">
@@ -745,6 +746,7 @@
               <div id="{{ card.id }}_smoke_status" class="property-inline-status hidden"></div>
             </div>
             {% endif %}
+            </div>
           </div>
           {% endif %}
 

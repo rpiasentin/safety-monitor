@@ -509,6 +509,17 @@
   border-radius: 12px;
   background: rgba(15, 31, 49, 0.56);
   padding: 0.55rem;
+  height: 100%;
+}
+
+.property-safety-grid {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.property-safety-grid.two-up {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .property-safety-head {
