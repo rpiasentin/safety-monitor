@@ -897,6 +897,7 @@
     const AUTO_REFRESH_MS = 60_000;
     let refreshInFlight = false;
     let refreshQueued = false;
+    let refreshQueuedFull = false;
 
     function isSettingsOpen() {
       const panel = document.getElementById('settings-panel');
@@ -938,13 +939,15 @@
       }
     }
 
-    async function refreshDashboard(reason = 'timer', force = false) {
+    async function refreshDashboard(reason = 'timer', force = false, full = false) {
       if (refreshInFlight) {
         refreshQueued = true;
+        refreshQueuedFull = refreshQueuedFull || !!full;
         return;
       }
       if (!force && isSettingsOpen()) {
         refreshQueued = true;
+        refreshQueuedFull = refreshQueuedFull || !!full;
         setRefreshStatus('live update paused while editing', 'warning');
         return;
       }
@@ -952,11 +955,13 @@
       const activeTag = document.activeElement?.tagName || '';
       if (!force && ['INPUT', 'SELECT', 'TEXTAREA'].includes(activeTag)) {
         refreshQueued = true;
+        refreshQueuedFull = refreshQueuedFull || !!full;
         setRefreshStatus('live update paused while typing', 'warning');
         return;
       }
 
       refreshQueued = false;
+      refreshQueuedFull = false;
       refreshInFlight = true;
       setRefreshStatus(reason === 'timer' ? 'syncing live data…' : 'updating…', 'muted');
       try {
@@ -970,10 +975,12 @@
         const nextDoc = new DOMParser().parseFromString(html, 'text/html');
         document.body.classList.add('live-refreshing');
         replaceSectionFromDoc('#header-alert-chip', nextDoc);
-        replaceSectionFromDoc('#summary-section', nextDoc);
-        replaceSectionFromDoc('#container-health-section', nextDoc);
-        replaceSectionFromDoc('#property-grid', nextDoc);
         replaceSectionFromDoc('#alerts-wrapper', nextDoc);
+        if (full) {
+          replaceSectionFromDoc('#summary-section', nextDoc);
+          replaceSectionFromDoc('#container-health-section', nextDoc);
+          replaceSectionFromDoc('#property-grid', nextDoc);
+        }
         const stamp = new Date().toLocaleTimeString('en-US', {
           hour: '2-digit',
           minute: '2-digit',
@@ -986,20 +993,23 @@
         refreshInFlight = false;
         document.body.classList.remove('live-refreshing');
         if (refreshQueued && !isSettingsOpen()) {
+          const nextFull = refreshQueuedFull;
           refreshQueued = false;
-          setTimeout(() => refreshDashboard('queued', true), 200);
+          refreshQueuedFull = false;
+          setTimeout(() => refreshDashboard('queued', true, nextFull), 200);
         }
       }
     }
 
-    function queueDashboardRefresh(reason = 'action') {
+    function queueDashboardRefresh(reason = 'action', full = false) {
       refreshQueued = true;
-      setTimeout(() => refreshDashboard(reason), 150);
+      refreshQueuedFull = refreshQueuedFull || !!full;
+      setTimeout(() => refreshDashboard(reason, false, full), 150);
     }
 
-    setInterval(() => refreshDashboard('timer'), AUTO_REFRESH_MS);
+    setInterval(() => refreshDashboard('timer', false, false), AUTO_REFRESH_MS);
     document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) queueDashboardRefresh('resume');
+      if (!document.hidden) queueDashboardRefresh('resume', false);
     });
 
     // Load sensor classification table for a property
@@ -1068,7 +1078,7 @@
         setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
         setRefreshStatus('live update paused while editing', 'warning');
       } else if (refreshQueued) {
-        queueDashboardRefresh('settings-closed');
+        queueDashboardRefresh('settings-closed', refreshQueuedFull);
       } else {
         setRefreshStatus('live update every 60s', 'muted');
       }
@@ -1165,7 +1175,7 @@
             statusEl.classList.replace('text-gray-400', 'text-green-400');
           }
         }
-        setTimeout(() => queueDashboardRefresh('lock-action'), warning ? 1800 : 700);
+        setTimeout(() => queueDashboardRefresh('lock-action', true), warning ? 1800 : 700);
       } catch (e) {
         if (statusEl) {
           statusEl.textContent = `✗ ${e.message}`;
@@ -1223,7 +1233,7 @@
               : `✓ Muted for ${data.minutes || minutes || 60}m`;
           statusEl.classList.replace('text-gray-400', 'text-green-400');
         }
-        setTimeout(() => queueDashboardRefresh('smoke-action'), 700);
+        setTimeout(() => queueDashboardRefresh('smoke-action', true), 700);
       } catch (e) {
         if (statusEl) {
           statusEl.textContent = `✗ ${e.message}`;
@@ -1264,7 +1274,7 @@
           statusEl.textContent = `✓ Cleared ${n} alert${n === 1 ? '' : 's'}`;
           statusEl.classList.replace('text-gray-400', 'text-green-400');
         }
-        queueDashboardRefresh('alerts-cleared');
+        queueDashboardRefresh('alerts-cleared', true);
       } catch (e) {
         if (statusEl) {
           statusEl.textContent = `✗ ${e.message}`;
@@ -1286,7 +1296,7 @@
         const row = document.getElementById(`alert-row-${alertId}`);
         if (row) row.remove();
         // Keep summary and card counts consistent after clear.
-        queueDashboardRefresh('water-cleared');
+        queueDashboardRefresh('water-cleared', true);
       } catch (e) {
         alert(`Clear failed: ${e.message}`);
       }
