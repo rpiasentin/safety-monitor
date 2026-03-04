@@ -350,12 +350,26 @@ def _hubitat_client_for_property(property_id: str) -> HubitatCloudClient | None:
     return HubitatCloudClient(coll_cfg["endpoint"], api_token=token)
 
 
-def _schedule_collection_refresh(retries: int = 3, wait_seconds: int = 5) -> None:
+def _schedule_collection_refresh(retries: int = 3,
+                                 wait_seconds: int = 5,
+                                 always_run: bool = False,
+                                 initial_delay: int = 0) -> None:
     """Background refresh helper used after control-plane actions."""
     retries = max(1, int(retries))
     wait_seconds = max(1, int(wait_seconds))
+    initial_delay = max(0, int(initial_delay))
 
     def _refresh_with_retry():
+        if initial_delay:
+            time.sleep(initial_delay)
+
+        if always_run:
+            for i in range(retries):
+                scheduler.collect_all()
+                if i < (retries - 1):
+                    time.sleep(wait_seconds)
+            return
+
         for _ in range(retries):
             if scheduler.collect_all():
                 return
@@ -883,7 +897,14 @@ async def api_lock_all(property_id: str, action: str,
             "failed": result.get("failed"),
         },
     )
-    _schedule_collection_refresh()
+    # Lock hardware/cloud states can settle a few seconds after command ACK.
+    # Run a short rolling refresh window so dashboard lock pills converge fast.
+    _schedule_collection_refresh(
+        retries=4,
+        wait_seconds=8,
+        always_run=True,
+        initial_delay=2,
+    )
     return JSONResponse(content={
         "status": "ok",
         "property_id": property_id,
@@ -935,7 +956,12 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
         message=f"{cmd.title()} lock requested: {lock_name}",
         details={"device_id": str(device_id), "friendly_name": lock_name},
     )
-    _schedule_collection_refresh()
+    _schedule_collection_refresh(
+        retries=4,
+        wait_seconds=8,
+        always_run=True,
+        initial_delay=2,
+    )
     return JSONResponse(content={
         "status": "ok",
         "property_id": property_id,
