@@ -142,6 +142,10 @@
                   class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">
                   Water
                 </button>
+                <button onclick="clearAlertsByCategory('{{ card.id }}', 'smoke')"
+                  class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 border border-gray-600">
+                  Smoke
+                </button>
                 <button onclick="clearAlertsByCategory('{{ card.id }}', 'all')"
                   class="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-red-50 border border-red-600">
                   All
@@ -706,11 +710,43 @@
               <div class="property-safety-list">
                 {% for sensor in card.smoke_devices %}
                 <div class="property-safety-row">
-                  <span class="property-safety-name">{{ sensor.friendly_name }}</span>
+                  <div class="property-safety-name-wrap">
+                    <span class="property-safety-name">{{ sensor.friendly_name }}</span>
+                    {% if sensor.sustained_minutes is not none and sensor.status == 'critical' %}
+                    <span class="property-lock-warning">alarm sustained {{ sensor.sustained_minutes }}m</span>
+                    {% endif %}
+                    {% if sensor.acked_until_clear and sensor.status == 'critical' %}
+                    <span class="property-lock-warning">acknowledged until clear</span>
+                    {% endif %}
+                    {% if sensor.muted_active %}
+                    <span class="property-lock-warning">muted {{ sensor.mute_remaining_minutes }}m remaining</span>
+                    {% endif %}
+                  </div>
                   <span class="property-state-pill state-{{ sensor.status }}">{{ sensor.state_label }}</span>
+                  <div class="property-row-actions">
+                    {% if sensor.can_ack %}
+                    <button onclick='runSmokeAction({{ card.id|tojson }}, {{ sensor.entity_id|tojson }}, "ack")'
+                            class="property-action-btn action-lock">
+                      Acknowledge
+                    </button>
+                    {% endif %}
+                    {% if sensor.can_mute and not sensor.muted_active %}
+                    <button onclick='runSmokeAction({{ card.id|tojson }}, {{ sensor.entity_id|tojson }}, "mute", {{ card.smoke_mute_default_minutes }})'
+                            class="property-action-btn action-unlock">
+                      Mute {{ card.smoke_mute_default_minutes }}m
+                    </button>
+                    {% endif %}
+                    {% if sensor.can_unmute %}
+                    <button onclick='runSmokeAction({{ card.id|tojson }}, {{ sensor.entity_id|tojson }}, "unmute")'
+                            class="property-action-btn">
+                      Unmute
+                    </button>
+                    {% endif %}
+                  </div>
                 </div>
                 {% endfor %}
               </div>
+              <div id="{{ card.id }}_smoke_status" class="property-inline-status hidden"></div>
             </div>
             {% endif %}
           </div>
@@ -771,7 +807,7 @@
     {% if alerts %}
     <div id="alerts-section" class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden monitor-card monitor-alerts">
       <div class="px-5 py-4 border-b border-gray-800">
-        <h2 class="text-base font-bold text-white">Alerts (active leaks + recent)</h2>
+        <h2 class="text-base font-bold text-white">Alerts (active safety + recent)</h2>
       </div>
       <div class="divide-y divide-gray-800">
         {% for alert in alerts %}
@@ -783,6 +819,7 @@
             {% elif alert.alert_type == 'battery' %}🔋
             {% elif alert.alert_type == 'offline' %}📡
             {% elif alert.alert_type == 'water' %}💧
+            {% elif alert.alert_type == 'smoke' %}🚨
             {% else %}⚠{% endif %}
           </span>
           <div class="flex-1 min-w-0">
@@ -791,6 +828,7 @@
               {{ ago(alert.triggered_at) }}
               {% if alert.pushover_sent %} · pushed{% endif %}
               {% if alert.alert_type == 'water' and not alert.resolved_at %} · latched until cleared{% endif %}
+              {% if alert.alert_type == 'smoke' and not alert.resolved_at %} · active until clear/ack{% endif %}
             </p>
           </div>
           <div class="flex items-center gap-2 flex-shrink-0">
@@ -1003,6 +1041,64 @@
           statusEl.classList.replace('text-gray-400', 'text-red-400');
         } else {
           alert(`${verb} failed: ${e.message}`);
+        }
+      }
+    }
+
+    async function runSmokeAction(pid, sensorId, action, minutes = null) {
+      const statusEl = document.getElementById(`${pid}_smoke_status`);
+      const prompt = action === 'ack'
+        ? 'Acknowledge this smoke alarm until clear?'
+        : action === 'unmute'
+          ? 'Remove mute for this smoke sensor?'
+          : `Mute this smoke sensor for ${minutes || 60} minutes?`;
+      if (!confirm(prompt)) return;
+
+      if (statusEl) {
+        statusEl.classList.remove('hidden', 'text-green-400', 'text-red-400', 'text-yellow-300');
+        statusEl.classList.add('text-gray-400');
+        statusEl.textContent = 'Saving smoke alarm action…';
+      }
+
+      let url = '';
+      if (action === 'ack') {
+        url = `/api/property/${encodeURIComponent(pid)}/smoke/${encodeURIComponent(sensorId)}/ack`;
+      } else if (action === 'unmute') {
+        url = `/api/property/${encodeURIComponent(pid)}/smoke/${encodeURIComponent(sensorId)}/unmute`;
+      } else {
+        const mins = Math.max(1, Number(minutes || 60));
+        url = `/api/property/${encodeURIComponent(pid)}/smoke/${encodeURIComponent(sensorId)}/mute/${encodeURIComponent(mins)}`;
+      }
+
+      try {
+        const resp = await fetch(url, { method: 'POST' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          const msg = data.error || resp.status;
+          if (statusEl) {
+            statusEl.textContent = `✗ ${msg}`;
+            statusEl.classList.replace('text-gray-400', 'text-red-400');
+          } else {
+            alert(`Smoke action failed: ${msg}`);
+          }
+          return;
+        }
+
+        if (statusEl) {
+          statusEl.textContent = action === 'ack'
+            ? '✓ Acknowledged until clear'
+            : action === 'unmute'
+              ? '✓ Mute removed'
+              : `✓ Muted for ${data.minutes || minutes || 60}m`;
+          statusEl.classList.replace('text-gray-400', 'text-green-400');
+        }
+        setTimeout(() => window.location.reload(), 900);
+      } catch (e) {
+        if (statusEl) {
+          statusEl.textContent = `✗ ${e.message}`;
+          statusEl.classList.replace('text-gray-400', 'text-red-400');
+        } else {
+          alert(`Smoke action failed: ${e.message}`);
         }
       }
     }

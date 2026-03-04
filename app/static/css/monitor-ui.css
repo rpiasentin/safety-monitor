@@ -504,6 +504,8 @@
 .property-row-actions {
   display: inline-flex;
   gap: 0.32rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .property-state-pill {

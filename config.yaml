@@ -113,6 +113,14 @@ alerts:
     pushover_enabled: true
     exclude_sensors: []
 
+  smoke:
+    enabled: true
+    sustain_minutes: 3
+    cooldown_minutes: 60
+    pushover_enabled: true
+    pushover_priority: 1
+    mute_default_minutes: 60
+
 # Device activity view — thresholds for "last seen" staleness checks.
 # Per-property overrides can be placed under each property's device_activity block.
 device_activity:

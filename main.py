@@ -12,6 +12,8 @@ Systemd service: see Safety_Monitor_Deployment_Guide.docx
 """
 
 import json
+import csv
+import io
 import logging
 import os
 import shutil
@@ -19,12 +21,13 @@ import subprocess
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 import uvicorn
 import yaml
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
@@ -551,9 +554,12 @@ def _decorate_lock_devices(lock_devices: list[dict]) -> tuple[list[dict], dict]:
     return decorated, counts
 
 
-def _decorate_smoke_devices(smoke_devices: list[dict]) -> tuple[list[dict], dict]:
+def _decorate_smoke_devices(smoke_devices: list[dict],
+                            smoke_state_map: dict[str, dict] | None = None) -> tuple[list[dict], dict]:
     decorated = []
     counts = {"critical": 0, "warning": 0, "good": 0, "unknown": 0}
+    smoke_state_map = smoke_state_map or {}
+    now = datetime.now(timezone.utc)
     for sensor in (smoke_devices or []):
         row = dict(sensor)
         status = str(row.get("status") or "unknown").strip().lower()
@@ -573,9 +579,47 @@ def _decorate_smoke_devices(smoke_devices: list[dict]) -> tuple[list[dict], dict
 
         row["status"] = status
         row["state_label"] = state_label
+
+        sensor_id = str(row.get("entity_id") or "").strip()
+        state_row = smoke_state_map.get(sensor_id) or {}
+        acked = bool(int(state_row.get("acked_until_clear") or 0))
+        muted_until_raw = state_row.get("muted_until")
+        muted_until_dt = _parse_timestamp_utc(muted_until_raw)
+        muted_active = bool(muted_until_dt and muted_until_dt > now)
+        mute_remaining_minutes = None
+        if muted_active and muted_until_dt:
+            mute_remaining_minutes = max(1, int((muted_until_dt - now).total_seconds() // 60))
+        first_alarm_dt = _parse_timestamp_utc(state_row.get("first_alarm_at"))
+        sustained_minutes = None
+        if status == "critical" and first_alarm_dt:
+            sustained_minutes = max(0, int((now - first_alarm_dt).total_seconds() // 60))
+
+        row["acked_until_clear"] = acked
+        row["muted_active"] = muted_active
+        row["muted_until"] = muted_until_raw
+        row["mute_remaining_minutes"] = mute_remaining_minutes
+        row["sustained_minutes"] = sustained_minutes
+        row["can_ack"] = bool(status == "critical" and not acked)
+        row["can_mute"] = bool(status in {"critical", "warning"})
+        row["can_unmute"] = bool(muted_active)
         decorated.append(row)
 
     return decorated, counts
+
+
+def _smoke_sensor_name(property_id: str, sensor_id: str) -> str:
+    sid = str(sensor_id or "").strip()
+    if not sid:
+        return ""
+    source_row = db.get_latest_reading(property_id, source="hubitat_cloud")
+    payload = _parse_raw_payload(source_row)
+    for sensor in (payload.get("smoke_devices") or []):
+        if str(sensor.get("entity_id") or "").strip() == sid:
+            return str(sensor.get("friendly_name") or sid)
+    row = db.get_smoke_sensor_state(property_id, sid)
+    if row:
+        return str(row.get("friendly_name") or sid)
+    return sid
 
 
 def _decode_system_event_rows(rows: list[dict]) -> list[dict]:
@@ -671,6 +715,7 @@ async def dashboard(request: Request):
     global_battery_cfg = global_alerts_cfg.get("battery", {})
     global_offline_cfg = global_alerts_cfg.get("offline", {})
     global_water_cfg = global_alerts_cfg.get("water", {})
+    global_smoke_cfg = global_alerts_cfg.get("smoke", {})
     lock_warning_map = _recent_lock_warning_map(limit=500)
     cards = []
     for p in props:
@@ -727,8 +772,10 @@ async def dashboard(request: Request):
             observed = str(lock.get("state") or "").strip().lower()
             # Hide stale warning once lock converges to expected state.
             lock["command_warning"] = warning if (not expected or observed != expected) else None
+        smoke_state_map = db.get_smoke_sensor_state_map(pid)
         smoke_devices, smoke_counts = _decorate_smoke_devices(
-            list(hub_payload.get("smoke_devices") or [])
+            list(hub_payload.get("smoke_devices") or []),
+            smoke_state_map=smoke_state_map,
         )
         source_warnings = row.get("source_warnings") if isinstance(row.get("source_warnings"), list) else []
 
@@ -745,6 +792,10 @@ async def dashboard(request: Request):
             "lock_counts":    lock_counts,
             "smoke_devices":  smoke_devices,
             "smoke_counts":   smoke_counts,
+            "smoke_sustain_minutes": int(pcfg.get("smoke_sustain_minutes",
+                                      global_smoke_cfg.get("sustain_minutes", 3))),
+            "smoke_mute_default_minutes": int(pcfg.get("smoke_mute_default_minutes",
+                                           global_smoke_cfg.get("mute_default_minutes", 60))),
             "alert_count":    len(prop_alerts),
             "recent_alerts":  prop_alerts[:3],
             "primary_temp":   pt,
@@ -935,18 +986,49 @@ async def system_decisions(request: Request,
                            level: str = "",
                            property_id: str = "",
                            event_type: str = "",
-                           limit: int = 250):
+                           limit: int = 250,
+                           cursor: int = 0):
     """Dedicated page for critical system decisions/operator actions."""
+    def _query(params: dict) -> str:
+        q = {k: v for k, v in params.items() if v not in (None, "", 0)}
+        return urlencode(q)
+
     level_filter = level.strip().lower() or None
     property_filter = property_id.strip() or None
     type_filter = event_type.strip().lower() or None
-    rows = db.get_system_events(
-        limit=limit,
+    try:
+        lim = max(1, min(int(limit), 1000))
+    except Exception:
+        lim = 250
+    cursor_id = int(cursor) if int(cursor or 0) > 0 else None
+
+    rows, next_cursor = db.get_system_events_page(
+        limit=lim,
+        cursor=cursor_id,
         level=level_filter,
         property_id=property_filter,
         event_type=type_filter,
     )
     events = _decode_system_event_rows(rows)
+    base_params = {
+        "level": level_filter or "",
+        "property_id": property_filter or "",
+        "event_type": type_filter or "",
+        "limit": lim,
+    }
+    newer_url = "/decisions"
+    newer_q = _query(base_params)
+    if newer_q:
+        newer_url = f"/decisions?{newer_q}"
+
+    older_url = None
+    if next_cursor:
+        older_q = _query({**base_params, "cursor": int(next_cursor)})
+        older_url = f"/decisions?{older_q}" if older_q else "/decisions"
+
+    export_limit = max(1000, lim)
+    csv_q = _query({**base_params, "cursor": cursor_id or "", "limit": export_limit, "format": "csv"})
+    json_q = _query({**base_params, "cursor": cursor_id or "", "limit": export_limit, "format": "json"})
 
     return templates.TemplateResponse("system_decisions.html", {
         "request": request,
@@ -956,7 +1038,18 @@ async def system_decisions(request: Request,
             "level": level_filter or "",
             "property_id": property_filter or "",
             "event_type": type_filter or "",
-            "limit": max(1, min(int(limit), 1000)),
+            "limit": lim,
+            "cursor": int(cursor_id or 0),
+        },
+        "page": {
+            "next_cursor": next_cursor,
+            "count": len(events),
+            "older_url": older_url,
+            "newer_url": newer_url,
+        },
+        "exports": {
+            "csv_url": f"/api/system/decisions/export?{csv_q}" if csv_q else "/api/system/decisions/export?format=csv",
+            "json_url": f"/api/system/decisions/export?{json_q}" if json_q else "/api/system/decisions/export?format=json",
         },
     })
 
@@ -1005,14 +1098,88 @@ async def api_system_health():
 async def api_system_decisions(limit: int = 200,
                                level: str = "",
                                property_id: str = "",
-                               event_type: str = ""):
-    rows = db.get_system_events(
+                               event_type: str = "",
+                               cursor: int = 0):
+    cursor_id = int(cursor) if int(cursor or 0) > 0 else None
+    rows, next_cursor = db.get_system_events_page(
         limit=limit,
+        cursor=cursor_id,
         level=level.strip().lower() or None,
         property_id=property_id.strip() or None,
         event_type=event_type.strip().lower() or None,
     )
-    return JSONResponse(content=_decode_system_event_rows(rows))
+    events = _decode_system_event_rows(rows)
+    resp = JSONResponse(content=events)
+    if next_cursor:
+        resp.headers["X-Next-Cursor"] = str(next_cursor)
+    return resp
+
+
+@app.get("/api/system/decisions/export")
+async def api_system_decisions_export(format: str = "csv",
+                                      limit: int = 5000,
+                                      level: str = "",
+                                      property_id: str = "",
+                                      event_type: str = "",
+                                      cursor: int = 0):
+    """Export decision log rows for incident review (CSV or JSON)."""
+    fmt = str(format or "csv").strip().lower()
+    if fmt not in {"csv", "json"}:
+        return JSONResponse(status_code=400, content={"error": "format must be 'csv' or 'json'"})
+
+    try:
+        lim = max(1, min(int(limit), 10000))
+    except Exception:
+        lim = 5000
+    cursor_id = int(cursor) if int(cursor or 0) > 0 else None
+    rows, next_cursor = db.get_system_events_page(
+        limit=lim,
+        cursor=cursor_id,
+        level=level.strip().lower() or None,
+        property_id=property_id.strip() or None,
+        event_type=event_type.strip().lower() or None,
+    )
+    events = _decode_system_event_rows(rows)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+    if fmt == "json":
+        payload = {
+            "exported_at": datetime.now(timezone.utc).isoformat(),
+            "count": len(events),
+            "next_cursor": next_cursor,
+            "filters": {
+                "level": level.strip().lower() or "",
+                "property_id": property_id.strip() or "",
+                "event_type": event_type.strip().lower() or "",
+                "cursor": int(cursor_id or 0),
+                "limit": lim,
+            },
+            "events": events,
+        }
+        return JSONResponse(
+            content=payload,
+            headers={"Content-Disposition": f'attachment; filename="decisions_{stamp}.json"'},
+        )
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "created_at", "level", "event_type", "property_id", "actor", "message", "details_json"])
+    for ev in events:
+        writer.writerow([
+            ev.get("id"),
+            ev.get("created_at"),
+            ev.get("level"),
+            ev.get("event_type"),
+            ev.get("property_id"),
+            ev.get("actor"),
+            ev.get("message"),
+            json.dumps(ev.get("details") or {}, ensure_ascii=True, sort_keys=True),
+        ])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="decisions_{stamp}.csv"'},
+    )
 
 
 @app.post("/api/property/{property_id}/locks/all/{action}")
@@ -1429,7 +1596,116 @@ async def clear_alert(alert_id: int, _auth=Depends(_require_write_auth)):
     return JSONResponse(content={"status": "cleared", "alert_id": alert_id})
 
 
-_CLEARABLE_ALERT_CATEGORIES = {"temperature", "battery", "offline", "water", "all"}
+@app.post("/api/property/{property_id}/smoke/{sensor_id}/ack")
+async def ack_smoke_alarm(property_id: str, sensor_id: str,
+                          _auth=Depends(_require_write_auth)):
+    """Acknowledge a smoke alarm for this sensor until it returns to clear."""
+    known_pids = {p.get("id") for p in CONFIG.get("properties", []) if p.get("id")}
+    if property_id not in known_pids:
+        return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+
+    sid = str(sensor_id or "").strip()
+    if not sid:
+        return JSONResponse(status_code=400, content={"error": "sensor_id is required"})
+
+    name = _smoke_sensor_name(property_id, sid)
+    db.set_smoke_sensor_ack(property_id, sid, acked_until_clear=True, friendly_name=name)
+    cleared = db.resolve_alerts_for_sensor(property_id, "smoke", sid)
+    _record_system_event(
+        event_type="smoke_alarm_acknowledged",
+        level="info",
+        property_id=property_id,
+        actor="api",
+        message="Smoke alarm acknowledged",
+        details={
+            "sensor_id": sid,
+            "friendly_name": name or sid,
+            "cleared_alerts": int(cleared),
+        },
+    )
+    logger.info("Smoke alarm acknowledged: pid=%s sensor=%s cleared=%s", property_id, sid, cleared)
+    return JSONResponse(content={
+        "status": "acknowledged",
+        "property_id": property_id,
+        "sensor_id": sid,
+        "cleared_alerts": int(cleared),
+    })
+
+
+@app.post("/api/property/{property_id}/smoke/{sensor_id}/mute/{minutes}")
+async def mute_smoke_alarm(property_id: str, sensor_id: str, minutes: int,
+                           _auth=Depends(_require_write_auth)):
+    """Mute smoke alarm notifications for one sensor for N minutes."""
+    known_pids = {p.get("id") for p in CONFIG.get("properties", []) if p.get("id")}
+    if property_id not in known_pids:
+        return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+
+    sid = str(sensor_id or "").strip()
+    if not sid:
+        return JSONResponse(status_code=400, content={"error": "sensor_id is required"})
+
+    mins = max(1, min(int(minutes), 60 * 24 * 14))  # up to 14 days
+    mute_until_dt = datetime.now(timezone.utc) + timedelta(minutes=mins)
+    mute_until_ts = mute_until_dt.strftime("%Y-%m-%d %H:%M:%S")
+    name = _smoke_sensor_name(property_id, sid)
+    db.set_smoke_sensor_mute(property_id, sid, mute_until=mute_until_ts, friendly_name=name)
+    _record_system_event(
+        event_type="smoke_alarm_muted",
+        level="info",
+        property_id=property_id,
+        actor="api",
+        message="Smoke alarm muted",
+        details={
+            "sensor_id": sid,
+            "friendly_name": name or sid,
+            "minutes": mins,
+            "muted_until": mute_until_ts,
+        },
+    )
+    logger.info("Smoke alarm muted: pid=%s sensor=%s minutes=%s", property_id, sid, mins)
+    return JSONResponse(content={
+        "status": "muted",
+        "property_id": property_id,
+        "sensor_id": sid,
+        "minutes": mins,
+        "muted_until": mute_until_dt.isoformat(),
+    })
+
+
+@app.post("/api/property/{property_id}/smoke/{sensor_id}/unmute")
+async def unmute_smoke_alarm(property_id: str, sensor_id: str,
+                             _auth=Depends(_require_write_auth)):
+    """Remove mute window for a smoke sensor."""
+    known_pids = {p.get("id") for p in CONFIG.get("properties", []) if p.get("id")}
+    if property_id not in known_pids:
+        return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+
+    sid = str(sensor_id or "").strip()
+    if not sid:
+        return JSONResponse(status_code=400, content={"error": "sensor_id is required"})
+
+    name = _smoke_sensor_name(property_id, sid)
+    db.set_smoke_sensor_mute(property_id, sid, muted_until=None, friendly_name=name)
+    _record_system_event(
+        event_type="smoke_alarm_unmuted",
+        level="info",
+        property_id=property_id,
+        actor="api",
+        message="Smoke alarm unmuted",
+        details={
+            "sensor_id": sid,
+            "friendly_name": name or sid,
+        },
+    )
+    logger.info("Smoke alarm unmuted: pid=%s sensor=%s", property_id, sid)
+    return JSONResponse(content={
+        "status": "unmuted",
+        "property_id": property_id,
+        "sensor_id": sid,
+    })
+
+
+_CLEARABLE_ALERT_CATEGORIES = {"temperature", "battery", "offline", "water", "smoke", "all"}
 
 
 @app.post("/api/alerts/clear/{pid}/{category}")

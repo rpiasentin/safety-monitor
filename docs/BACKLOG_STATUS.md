@@ -1,6 +1,6 @@
 # Safety Monitor Backlog Status
 
-Last updated: 2026-03-04
+Last updated: 2026-03-04 (night pass)
 
 ## Delivered In This Pass
 
@@ -37,16 +37,23 @@ Last updated: 2026-03-04
 - Added warning text on property cards while stale fallback is active.
 - Added decision-log event type: `stale_tesla_fallback_applied`.
 
+7. Smoke/CO escalation + controls
+- Added sustained smoke/CO alarm escalation policy (`alerts.smoke.sustain_minutes`).
+- Added smoke alarm alert type with persistent active alerts until clear/ack.
+- Added per-sensor smoke controls on property cards:
+  - acknowledge until clear
+  - mute for configurable minutes
+  - unmute
+- Added audit events for smoke actions and alarm lifecycle.
+
+8. Decisions page scale improvements
+- Added cursor-based pagination for `/decisions`.
+- Added cursor support for `GET /api/system/decisions` via `cursor` query param + `X-Next-Cursor` header.
+- Added incident export endpoint:
+  - `GET /api/system/decisions/export?format=csv|json`
+
 ## Suggested Next Slice
 
 1. Safety workflows
 - Add optional confirmation code flow for unlock actions.
 - Add role-based auth if/when `MONITOR_API_KEY` becomes mandatory.
-
-2. Smoke/CO escalation
-- Add alerting policy for sustained smoke/CO alarm states.
-- Add mute/acknowledge controls for smoke alarms with audit events.
-
-3. Decisions page improvements
-- Add pagination/cursor support for very large logs.
-- Add export endpoint for incident review.

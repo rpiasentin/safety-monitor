@@ -4,6 +4,7 @@ Alert processing and Pushover notifications.
 Checks:
   - Battery SOC below threshold (EG4 or Hubitat devices)
   - Water sensors reporting wet/leak state (latched critical until manual clear)
+  - Smoke/CO alarm states that remain active beyond sustained threshold
   - Collector offline (no data for > timeout_minutes)
   - Temperature below threshold (°F)
 
@@ -79,6 +80,8 @@ def _cooldown_ok(property_id: str, alert_type: str, sensor_id: str | None,
         return True
     try:
         last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc) - last_dt > timedelta(minutes=cooldown_minutes)
     except Exception:
         return True
@@ -108,6 +111,9 @@ class AlertProcessor:
 
         if self.cfg.get("water", {}).get("enabled", True):
             fired += self._check_water_sensors(pid, snapshot, pcfg)
+
+        if self.cfg.get("smoke", {}).get("enabled", True):
+            fired += self._check_smoke_sensors(pid, snapshot, pcfg)
 
         if self.cfg.get("offline", {}).get("enabled", True):
             fired += self._check_offline(pid, snapshot, pcfg)
@@ -302,6 +308,155 @@ class AlertProcessor:
                 "state": "wet",
             })
             logger.error("WATER ALERT [%s] %s: wet", pid, name)
+
+        return fired
+
+    # ── Smoke / CO sensors (sustained escalation) ────────────────────────────
+
+    @staticmethod
+    def _parse_utc(raw_ts: str | None) -> datetime | None:
+        if not raw_ts:
+            return None
+        try:
+            ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return ts.astimezone(timezone.utc)
+        except Exception:
+            return None
+
+    def _check_smoke_sensors(self, pid: str, snapshot: dict,
+                             property_cfg: dict) -> list[dict]:
+        cfg = self.cfg.get("smoke", {})
+        sustain_minutes = int(property_cfg.get("smoke_sustain_minutes",
+                                               cfg.get("sustain_minutes", 3)))
+        cooldown = int(property_cfg.get("smoke_cooldown_minutes",
+                                        cfg.get("cooldown_minutes", 60)))
+        use_push = property_cfg.get("smoke_pushover_enabled",
+                                    cfg.get("pushover_enabled", True))
+        push_priority = int(cfg.get("pushover_priority", 1))
+        sustain_minutes = max(1, sustain_minutes)
+        cooldown = max(1, cooldown)
+
+        now = datetime.now(timezone.utc)
+        now_ts = now.strftime("%Y-%m-%d %H:%M:%S")
+        fired = []
+        state_map = db.get_smoke_sensor_state_map(pid)
+
+        for sensor in snapshot.get("smoke_devices", []):
+            sensor_id = str(sensor.get("entity_id") or sensor.get("friendly_name") or "").strip()
+            if not sensor_id:
+                continue
+            name = str(sensor.get("friendly_name") or sensor_id).strip()
+            state = str(sensor.get("state") or "unknown").strip().lower()
+            status = str(sensor.get("status") or "unknown").strip().lower()
+
+            row = state_map.get(sensor_id) or {}
+            prev_state = str(row.get("last_state") or "unknown").strip().lower()
+            acked = bool(int(row.get("acked_until_clear") or 0))
+            muted_until_raw = row.get("muted_until")
+            muted_until_dt = self._parse_utc(muted_until_raw)
+            muted_active = bool(muted_until_dt and muted_until_dt > now)
+            muted_store = muted_until_raw if muted_active else None
+
+            is_alarm = state == "alarm" or status == "critical"
+            if is_alarm:
+                first_alarm_dt = self._parse_utc(row.get("first_alarm_at"))
+                if prev_state != "alarm" or first_alarm_dt is None:
+                    first_alarm_dt = now
+                first_alarm_ts = first_alarm_dt.strftime("%Y-%m-%d %H:%M:%S")
+                sustained = now - first_alarm_dt
+                sustained_ready = sustained >= timedelta(minutes=sustain_minutes)
+                sustained_mins = max(0, int(sustained.total_seconds() // 60))
+
+                active = db.find_active_alert(pid, "smoke", sensor_id=sensor_id)
+                if sustained_ready and not active and not acked:
+                    msg = (
+                        f"🚨 SMOKE/CO ALARM at {snapshot.get('property_name', pid)}: "
+                        f"{name} has remained in alarm for {sustained_mins}m"
+                    )
+                    alert_id = db.insert_alert(
+                        pid,
+                        "smoke",
+                        msg,
+                        sensor_id=sensor_id,
+                        value=1.0,
+                        threshold=float(sustain_minutes),
+                        severity="critical",
+                    )
+                    pushed = False
+                    if use_push and not muted_active and _cooldown_ok(pid, "smoke", sensor_id, cooldown):
+                        pushed = _send_pushover(
+                            f"Safety Monitor — {snapshot.get('property_name', pid)}",
+                            msg,
+                            priority=push_priority,
+                        )
+                        if pushed:
+                            db.mark_alert_pushover_sent(alert_id)
+
+                    db.insert_system_event(
+                        event_type="smoke_alarm_escalated",
+                        level="warning",
+                        property_id=pid,
+                        actor="alert",
+                        message=f"Sustained smoke/CO alarm escalated: {name}",
+                        details={
+                            "sensor_id": sensor_id,
+                            "friendly_name": name,
+                            "sustain_minutes": sustain_minutes,
+                            "observed_minutes": sustained_mins,
+                            "muted": muted_active,
+                            "pushed": bool(pushed),
+                        },
+                    )
+                    fired.append({
+                        "type": "smoke",
+                        "sensor": sensor_id,
+                        "severity": "critical",
+                        "state": "alarm",
+                        "sustained_minutes": sustained_mins,
+                    })
+                    logger.error("SMOKE ALERT [%s] %s: alarm sustained %dm", pid, name, sustained_mins)
+
+                db.upsert_smoke_sensor_state(
+                    property_id=pid,
+                    sensor_id=sensor_id,
+                    friendly_name=name,
+                    last_state="alarm",
+                    first_alarm_at=first_alarm_ts,
+                    last_alarm_at=now_ts,
+                    acked_until_clear=acked,
+                    muted_until=muted_store,
+                )
+                continue
+
+            # Any non-alarm state clears the sustained timer and ack latch.
+            cleared = db.resolve_alerts_for_sensor(pid, "smoke", sensor_id)
+            if cleared:
+                db.insert_system_event(
+                    event_type="smoke_alarm_cleared",
+                    level="info",
+                    property_id=pid,
+                    actor="alert",
+                    message=f"Smoke/CO alarm cleared: {name}",
+                    details={
+                        "sensor_id": sensor_id,
+                        "friendly_name": name,
+                        "cleared_alerts": int(cleared),
+                        "state": state,
+                    },
+                )
+
+            db.upsert_smoke_sensor_state(
+                property_id=pid,
+                sensor_id=sensor_id,
+                friendly_name=name,
+                last_state=state or "unknown",
+                first_alarm_at=None,
+                last_alarm_at=None,
+                acked_until_clear=False,
+                muted_until=muted_store,
+            )
 
         return fired
 

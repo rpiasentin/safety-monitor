@@ -104,17 +104,24 @@ Completed:
 - Feed freshness boxes for Hubitat, Home Assistant, EG4, and Victron on each property
 - Property lock status panel with lock/unlock controls (`all` + per-lock actions)
 - Property smoke/CO status panel for each location card
+- Sustained smoke/CO alert escalation with per-sensor acknowledge/mute/unmute controls
 - Hubitat device auto-pruning when devices are removed upstream
 - Dedicated critical decision log page at `/decisions`
 - Persistent `system_events` decision trail in SQLite (operator/system actions)
 - Time-bounded stale Tesla/Powerwall fallback to keep HC energy cards visible during transient HA outages, with decision-log events
+- Decisions page cursor pagination + incident export endpoint (`/api/system/decisions/export`)
 
 Operational details:
 - Lock control endpoints:
   - `POST /api/property/{property_id}/locks/all/{lock|unlock}`
   - `POST /api/property/{property_id}/locks/{device_id}/{lock|unlock}`
+- Smoke control endpoints:
+  - `POST /api/property/{property_id}/smoke/{sensor_id}/ack`
+  - `POST /api/property/{property_id}/smoke/{sensor_id}/mute/{minutes}`
+  - `POST /api/property/{property_id}/smoke/{sensor_id}/unmute`
 - Decision log API endpoint:
   - `GET /api/system/decisions`
+  - `GET /api/system/decisions/export?format=csv|json`
 - Reboot action can run under non-root service via scoped sudoers policy:
   - `/etc/sudoers.d/safety-monitor-reboot` (installed by `deploy/install.sh`)
 - Device pruning is conservative: if Hubitat returns an empty/unusable payload, prune is skipped to avoid accidental mass removal.

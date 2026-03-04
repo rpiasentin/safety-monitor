@@ -5,6 +5,7 @@ All reads/writes go through this module.
 Schema:
   readings        — one row per collection run per source per property
   hubitat_devices — latest battery level per device per property
+  smoke_sensor_state — per-sensor smoke alarm lifecycle + mute/ack state
   system_events   — critical system decisions and operator actions
   alerts          — triggered alert history with cooldown tracking
 """
@@ -62,6 +63,19 @@ CREATE TABLE IF NOT EXISTS hubitat_devices (
     UNIQUE(property_id, entity_id) ON CONFLICT REPLACE
 );
 
+CREATE TABLE IF NOT EXISTS smoke_sensor_state (
+    property_id         TEXT    NOT NULL,
+    sensor_id           TEXT    NOT NULL,
+    friendly_name       TEXT,
+    last_state          TEXT    NOT NULL,
+    first_alarm_at      TEXT,
+    last_alarm_at       TEXT,
+    acked_until_clear   INTEGER DEFAULT 0,
+    muted_until         TEXT,
+    updated_at          TEXT    NOT NULL,
+    PRIMARY KEY(property_id, sensor_id)
+);
+
 CREATE TABLE IF NOT EXISTS alerts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     property_id     TEXT    NOT NULL,
@@ -80,6 +94,8 @@ CREATE INDEX IF NOT EXISTS idx_readings_property_time
     ON readings(property_id, collected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_property_time
     ON alerts(property_id, triggered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_smoke_state_updated
+    ON smoke_sensor_state(property_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS system_events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -347,6 +363,148 @@ def get_hubitat_devices_activity(property_id: str,
     return [dict(r) for r in rows]
 
 
+# ── Smoke sensor state ────────────────────────────────────────────────────────
+
+def get_smoke_sensor_state(property_id: str,
+                           sensor_id: str,
+                           path: str = DB_PATH) -> dict | None:
+    with get_conn(path) as conn:
+        row = conn.execute("""
+            SELECT * FROM smoke_sensor_state
+            WHERE property_id=? AND sensor_id=?
+            LIMIT 1
+        """, (property_id, sensor_id)).fetchone()
+    return dict(row) if row else None
+
+
+def get_smoke_sensor_states(property_id: str,
+                            path: str = DB_PATH) -> list[dict]:
+    with get_conn(path) as conn:
+        rows = conn.execute("""
+            SELECT * FROM smoke_sensor_state
+            WHERE property_id=?
+            ORDER BY updated_at DESC, sensor_id ASC
+        """, (property_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_smoke_sensor_state_map(property_id: str,
+                               path: str = DB_PATH) -> dict[str, dict]:
+    rows = get_smoke_sensor_states(property_id, path=path)
+    out: dict[str, dict] = {}
+    for row in rows:
+        sid = str(row.get("sensor_id") or "").strip()
+        if sid:
+            out[sid] = row
+    return out
+
+
+def upsert_smoke_sensor_state(property_id: str,
+                              sensor_id: str,
+                              friendly_name: str = "",
+                              last_state: str = "unknown",
+                              first_alarm_at: str | None = None,
+                              last_alarm_at: str | None = None,
+                              acked_until_clear: bool = False,
+                              muted_until: str | None = None,
+                              path: str = DB_PATH) -> None:
+    now = _now()
+    with get_conn(path) as conn:
+        conn.execute("""
+            INSERT INTO smoke_sensor_state
+              (property_id, sensor_id, friendly_name, last_state,
+               first_alarm_at, last_alarm_at, acked_until_clear,
+               muted_until, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(property_id, sensor_id) DO UPDATE SET
+              friendly_name=excluded.friendly_name,
+              last_state=excluded.last_state,
+              first_alarm_at=excluded.first_alarm_at,
+              last_alarm_at=excluded.last_alarm_at,
+              acked_until_clear=excluded.acked_until_clear,
+              muted_until=excluded.muted_until,
+              updated_at=excluded.updated_at
+        """, (
+            property_id,
+            sensor_id,
+            (friendly_name or ""),
+            str(last_state or "unknown").strip().lower(),
+            first_alarm_at,
+            last_alarm_at,
+            1 if acked_until_clear else 0,
+            muted_until,
+            now,
+        ))
+
+
+def set_smoke_sensor_ack(property_id: str,
+                         sensor_id: str,
+                         acked_until_clear: bool = True,
+                         friendly_name: str = "",
+                         path: str = DB_PATH) -> None:
+    row = get_smoke_sensor_state(property_id, sensor_id, path=path)
+    now = _now()
+    if row is None:
+        upsert_smoke_sensor_state(
+            property_id=property_id,
+            sensor_id=sensor_id,
+            friendly_name=friendly_name or sensor_id,
+            last_state="unknown",
+            first_alarm_at=None,
+            last_alarm_at=None,
+            acked_until_clear=acked_until_clear,
+            muted_until=None,
+            path=path,
+        )
+        return
+    with get_conn(path) as conn:
+        conn.execute("""
+            UPDATE smoke_sensor_state
+            SET acked_until_clear=?, updated_at=?, friendly_name=?
+            WHERE property_id=? AND sensor_id=?
+        """, (
+            1 if acked_until_clear else 0,
+            now,
+            friendly_name or row.get("friendly_name") or sensor_id,
+            property_id,
+            sensor_id,
+        ))
+
+
+def set_smoke_sensor_mute(property_id: str,
+                          sensor_id: str,
+                          muted_until: str | None,
+                          friendly_name: str = "",
+                          path: str = DB_PATH) -> None:
+    row = get_smoke_sensor_state(property_id, sensor_id, path=path)
+    now = _now()
+    if row is None:
+        upsert_smoke_sensor_state(
+            property_id=property_id,
+            sensor_id=sensor_id,
+            friendly_name=friendly_name or sensor_id,
+            last_state="unknown",
+            first_alarm_at=None,
+            last_alarm_at=None,
+            acked_until_clear=False,
+            muted_until=muted_until,
+            path=path,
+        )
+        return
+    with get_conn(path) as conn:
+        conn.execute("""
+            UPDATE smoke_sensor_state
+            SET muted_until=?, updated_at=?, friendly_name=?
+            WHERE property_id=? AND sensor_id=?
+        """, (
+            muted_until,
+            now,
+            friendly_name or row.get("friendly_name") or sensor_id,
+            property_id,
+            sensor_id,
+        ))
+
+
 # ── Alerts ────────────────────────────────────────────────────────────────────
 
 def insert_alert(property_id: str, alert_type: str, message: str,
@@ -422,31 +580,32 @@ def get_dashboard_alerts(hours: int = 24,
                          path: str = DB_PATH) -> list[dict]:
     """
     Alerts shown on the dashboard:
-      1) all unresolved water alerts (latched until manual clear)
-      2) recent non-water alerts in the time window, collapsed so repeated
+      1) all unresolved water + smoke alerts (latched until clear/ack)
+      2) recent non-water/non-smoke alerts in the time window, collapsed so repeated
          triggers for the same property/type/sensor appear as one row with
          repeat_count.
     """
     with get_conn(path) as conn:
-        water_rows = conn.execute("""
+        latched_rows = conn.execute("""
             SELECT * FROM alerts
-            WHERE alert_type='water' AND resolved_at IS NULL
+            WHERE alert_type IN ('water', 'smoke')
+              AND resolved_at IS NULL
             ORDER BY id DESC
         """).fetchall()
         recent_rows = conn.execute("""
             SELECT * FROM alerts
-            WHERE alert_type!='water'
+            WHERE alert_type NOT IN ('water', 'smoke')
               AND resolved_at IS NULL
               AND triggered_at >= datetime('now', ?)
             ORDER BY id DESC
         """, (f"-{hours} hours",)).fetchall()
 
-    # Keep all active water alerts as individual rows (latched by sensor).
-    water_out = []
-    for r in water_rows:
+    # Keep all active latched alerts (water/smoke) as individual rows.
+    latched_out = []
+    for r in latched_rows:
         d = dict(r)
         d["repeat_count"] = 1
-        water_out.append(d)
+        latched_out.append(d)
 
     # Collapse repeated non-water alerts by property/type/sensor.
     grouped: dict[tuple[str, str, str], dict] = {}
@@ -471,7 +630,7 @@ def get_dashboard_alerts(hours: int = 24,
     if int(recent_limit) > 0:
         recent_out = recent_out[:int(recent_limit)]
 
-    out = water_out + recent_out
+    out = latched_out + recent_out
     out.sort(key=lambda r: int(r.get("id") or 0), reverse=True)
     return out
 
@@ -513,6 +672,24 @@ def resolve_alerts(property_id: str,
                 WHERE property_id=?
                   AND resolved_at IS NULL
             """, (now, property_id))
+    return int(cur.rowcount or 0)
+
+
+def resolve_alerts_for_sensor(property_id: str,
+                              alert_type: str,
+                              sensor_id: str,
+                              path: str = DB_PATH) -> int:
+    """Resolve all unresolved alerts for a property/type/sensor."""
+    now = _now()
+    with get_conn(path) as conn:
+        cur = conn.execute("""
+            UPDATE alerts
+            SET resolved_at=?
+            WHERE property_id=?
+              AND alert_type=?
+              AND sensor_id=?
+              AND resolved_at IS NULL
+        """, (now, property_id, alert_type, sensor_id))
     return int(cur.rowcount or 0)
 
 
@@ -603,6 +780,53 @@ def get_system_events(limit: int = 200,
     with get_conn(path) as conn:
         rows = conn.execute(sql, tuple(params)).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_system_events_page(limit: int = 200,
+                           cursor: int | None = None,
+                           level: str | None = None,
+                           property_id: str | None = None,
+                           event_type: str | None = None,
+                           path: str = DB_PATH) -> tuple[list[dict], int | None]:
+    """
+    Cursor pagination for decisions:
+      - ordered by id DESC (newest first)
+      - cursor means "older than this id" (id < cursor)
+    Returns (rows, next_cursor).
+    """
+    where = []
+    params: list = []
+
+    if level:
+        where.append("level=?")
+        params.append(str(level).strip().lower())
+    if property_id:
+        where.append("property_id=?")
+        params.append(property_id)
+    if event_type:
+        where.append("event_type=?")
+        params.append(str(event_type).strip().lower())
+    if cursor is not None:
+        where.append("id < ?")
+        params.append(int(cursor))
+
+    sql = "SELECT * FROM system_events"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY id DESC"
+
+    try:
+        lim = max(1, min(int(limit), 1000))
+    except Exception:
+        lim = 200
+    sql += " LIMIT ?"
+    params.append(lim)
+
+    with get_conn(path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    out = [dict(r) for r in rows]
+    next_cursor = int(out[-1]["id"]) if len(out) >= lim else None
+    return out, next_cursor
 
 
 def get_latest_merged_all(path: str = DB_PATH) -> dict[str, dict]:
