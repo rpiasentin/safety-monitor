@@ -25,7 +25,7 @@
         <p class="text-[11px] text-cyan-100/70 tracking-wide">CT104 live operations</p>
       </div>
     </div>
-    <div class="flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-300">
+    <div class="header-actions-wrap flex items-center gap-3 sm:gap-4 text-xs sm:text-sm text-gray-300">
       {% set total_alerts = alerts|length %}
       {% if total_alerts > 0 %}
         <span id="header-alert-chip" class="monitor-chip bg-red-600 text-white px-3 py-1 rounded-full font-semibold">
@@ -36,12 +36,20 @@
       {% endif %}
       <span id="clock" class="monitor-chip monitor-clock font-mono tabular-nums px-2.5 py-1 rounded-full"></span>
       <span id="live-refresh-status" class="text-gray-600">live update every 60s</span>
-      <a href="/decisions"
-        class="monitor-button text-gray-200 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-xs sm:text-sm font-medium border border-gray-700 hover:border-gray-500"
-        title="Critical system decisions log">Decisions</a>
-      <button onclick="toggleSettings()" id="settings-btn"
-        class="monitor-button text-gray-200 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-xs sm:text-sm font-medium border border-gray-700 hover:border-gray-500"
-        title="Alert rule settings">⚙ Alert Rules</button>
+      <div class="header-quick-nav">
+        <a href="#summary-section"
+          class="monitor-button monitor-mini-button text-gray-200 hover:text-white px-2.5 py-1 rounded-lg hover:bg-gray-800 transition-colors text-xs font-medium border border-gray-700 hover:border-gray-500"
+          title="Jump to summary">Summary</a>
+        <a href="#alerts-wrapper"
+          class="monitor-button monitor-mini-button text-gray-200 hover:text-white px-2.5 py-1 rounded-lg hover:bg-gray-800 transition-colors text-xs font-medium border border-gray-700 hover:border-gray-500"
+          title="Jump to alerts">Alerts</a>
+        <a href="/decisions"
+          class="monitor-button monitor-mini-button text-gray-200 hover:text-white px-2.5 py-1 rounded-lg hover:bg-gray-800 transition-colors text-xs font-medium border border-gray-700 hover:border-gray-500"
+          title="Critical system decisions log">Decisions</a>
+        <button onclick="toggleSettings()" id="settings-btn"
+          class="monitor-button monitor-mini-button text-gray-200 hover:text-white px-2.5 py-1 rounded-lg hover:bg-gray-800 transition-colors text-xs font-medium border border-gray-700 hover:border-gray-500"
+          title="Alert rule settings">Rules</button>
+      </div>
     </div>
   </header>
 
@@ -870,14 +878,6 @@
     </section>
 
   </main>
-
-  <nav class="mobile-thumb-dock" aria-label="Quick Actions">
-    <button class="thumb-dock-btn" onclick="toggleSettings()">Alert Rules</button>
-    <a class="thumb-dock-btn" href="#summary-section">Summary</a>
-    <a class="thumb-dock-btn" href="#alerts-wrapper">Alerts</a>
-    <a class="thumb-dock-btn" href="/decisions">Decisions</a>
-    <a class="thumb-dock-btn" href="#dashboard-top">Top</a>
-  </nav>
 
   <!-- Footer -->
   <footer class="monitor-footer text-center py-6 text-xs">
