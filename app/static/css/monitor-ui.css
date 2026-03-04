@@ -472,6 +472,19 @@
   white-space: nowrap;
 }
 
+.property-safety-name-wrap {
+  min-width: 0;
+  display: grid;
+  gap: 0.18rem;
+}
+
+.property-lock-warning {
+  font-size: 0.64rem;
+  line-height: 1.2;
+  color: #f5cb74;
+  letter-spacing: 0.02em;
+}
+
 .property-row-actions {
   display: inline-flex;
   gap: 0.32rem;
@@ -849,7 +862,7 @@
     padding: 0.45rem;
   }
 
-  .property-safety-name {
+  .property-safety-name-wrap {
     grid-area: name;
   }
 

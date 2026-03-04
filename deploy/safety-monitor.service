@@ -9,8 +9,8 @@ User=safetymon
 WorkingDirectory=/opt/safety-monitor/app
 EnvironmentFile=/opt/safety-monitor/.env
 ExecStart=/usr/bin/python3 /opt/safety-monitor/app/main.py
-Restart=on-failure
-RestartSec=15
+Restart=always
+RestartSec=5
 StandardOutput=append:/opt/safety-monitor/logs/safety-monitor.log
 StandardError=append:/opt/safety-monitor/logs/safety-monitor.log
 

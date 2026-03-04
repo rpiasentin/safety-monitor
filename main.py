@@ -378,6 +378,121 @@ def _schedule_collection_refresh(retries: int = 3,
     threading.Thread(target=_refresh_with_retry, daemon=True).start()
 
 
+def _expected_lock_state(action: str) -> str:
+    return "locked" if str(action or "").strip().lower() == "lock" else "unlocked"
+
+
+def _verify_lock_transition(client: HubitatCloudClient,
+                            expected_states: dict[str, str],
+                            name_hints: dict[str, str] | None = None,
+                            polls: int = 4,
+                            wait_seconds: int = 3) -> dict:
+    """
+    Poll Hubitat lock states after a command and report devices that did not
+    transition to the expected state.
+    """
+    pending: dict[str, dict] = {}
+    for device_id, expected in (expected_states or {}).items():
+        did = str(device_id).strip()
+        if not did:
+            continue
+        pending[did] = {
+            "device_id": did,
+            "expected_state": str(expected or "").strip().lower(),
+            "observed_state": "unknown",
+            "friendly_name": (name_hints or {}).get(did) or did,
+        }
+
+    polls = max(1, int(polls))
+    wait_seconds = max(1, int(wait_seconds))
+
+    for attempt in range(polls):
+        if attempt > 0:
+            time.sleep(wait_seconds)
+
+        try:
+            current = client.get_lock_devices()
+        except Exception as exc:
+            logger.warning("Lock transition verification poll failed: %s", exc)
+            continue
+
+        by_id = {str(x.get("entity_id")): x for x in current}
+        for did in list(pending.keys()):
+            row = pending[did]
+            cur = by_id.get(did, {})
+            observed = str(cur.get("state") or "unknown").strip().lower()
+            row["observed_state"] = observed
+            if cur.get("friendly_name"):
+                row["friendly_name"] = cur.get("friendly_name")
+            if observed == row["expected_state"]:
+                del pending[did]
+
+        if not pending:
+            break
+
+    unresolved = sorted(pending.values(), key=lambda x: str(x.get("friendly_name") or x.get("device_id")))
+    return {
+        "ok": len(unresolved) == 0,
+        "unresolved": unresolved,
+    }
+
+
+def _record_lock_state_unchanged(property_id: str,
+                                 action: str,
+                                 unresolved: list[dict]) -> list[dict]:
+    warnings = []
+    for row in (unresolved or []):
+        did = str(row.get("device_id") or "").strip()
+        if not did:
+            continue
+        name = row.get("friendly_name") or did
+        expected = str(row.get("expected_state") or "").strip().lower()
+        observed = str(row.get("observed_state") or "").strip().lower() or "unknown"
+        msg = f"Command sent but device status not changing: {name} stayed {observed}"
+        details = {
+            "device_id": did,
+            "friendly_name": name,
+            "action": str(action or "").strip().lower(),
+            "expected_state": expected,
+            "observed_state": observed,
+            "message": "Command sent but device status not changing",
+        }
+        _record_system_event(
+            event_type="lock_command_state_unchanged",
+            level="warning",
+            property_id=property_id,
+            actor="api",
+            message=msg,
+            details=details,
+        )
+        warnings.append(details)
+    return warnings
+
+
+def _recent_lock_warning_map(limit: int = 300) -> dict[str, dict[str, dict]]:
+    """
+    Build latest warning lookup: property_id -> device_id -> warning details.
+    """
+    rows = db.get_system_events(limit=limit, event_type="lock_command_state_unchanged")
+    events = _decode_system_event_rows(rows)
+    out: dict[str, dict[str, dict]] = {}
+    for ev in events:
+        pid = str(ev.get("property_id") or "").strip()
+        details = ev.get("details") or {}
+        did = str(details.get("device_id") or "").strip()
+        if not pid or not did:
+            continue
+        out.setdefault(pid, {})
+        if did in out[pid]:
+            continue
+        out[pid][did] = {
+            "created_at": ev.get("created_at"),
+            "expected_state": str(details.get("expected_state") or "").strip().lower(),
+            "message": str(details.get("message") or ev.get("message") or "").strip(),
+        }
+    return out
+
+
 def _decorate_lock_devices(lock_devices: list[dict]) -> tuple[list[dict], dict]:
     decorated = []
     counts = {"locked": 0, "unlocked": 0, "other": 0}
@@ -526,6 +641,7 @@ async def dashboard(request: Request):
     global_battery_cfg = global_alerts_cfg.get("battery", {})
     global_offline_cfg = global_alerts_cfg.get("offline", {})
     global_water_cfg = global_alerts_cfg.get("water", {})
+    lock_warning_map = _recent_lock_warning_map(limit=500)
     cards = []
     for p in props:
         pid  = p["id"]
@@ -569,6 +685,17 @@ async def dashboard(request: Request):
         lock_devices, lock_counts = _decorate_lock_devices(
             list(hub_payload.get("lock_devices") or [])
         )
+        prop_lock_warnings = lock_warning_map.get(pid) or {}
+        for lock in lock_devices:
+            did = str(lock.get("entity_id") or "").strip()
+            warning = prop_lock_warnings.get(did)
+            if not warning:
+                lock["command_warning"] = None
+                continue
+            expected = str(warning.get("expected_state") or "").strip().lower()
+            observed = str(lock.get("state") or "").strip().lower()
+            # Hide stale warning once lock converges to expected state.
+            lock["command_warning"] = warning if (not expected or observed != expected) else None
         smoke_devices, smoke_counts = _decorate_smoke_devices(
             list(hub_payload.get("smoke_devices") or [])
         )
@@ -897,6 +1024,33 @@ async def api_lock_all(property_id: str, action: str,
             "failed": result.get("failed"),
         },
     )
+
+    attempted_ids = []
+    name_hints: dict[str, str] = {}
+    for row in (result.get("results") or []):
+        did = str(row.get("device_id") or "").strip()
+        if not did:
+            continue
+        attempted_ids.append(did)
+        name_hints[did] = str(row.get("friendly_name") or did)
+
+    warnings: list[dict] = []
+    if attempted_ids:
+        expected = _expected_lock_state(cmd)
+        verify = _verify_lock_transition(
+            client,
+            expected_states={did: expected for did in attempted_ids},
+            name_hints=name_hints,
+            polls=4,
+            wait_seconds=3,
+        )
+        if not verify.get("ok"):
+            warnings = _record_lock_state_unchanged(
+                property_id=property_id,
+                action=cmd,
+                unresolved=verify.get("unresolved") or [],
+            )
+
     # Lock hardware/cloud states can settle a few seconds after command ACK.
     # Run a short rolling refresh window so dashboard lock pills converge fast.
     _schedule_collection_refresh(
@@ -910,6 +1064,11 @@ async def api_lock_all(property_id: str, action: str,
         "property_id": property_id,
         "action": cmd,
         "result": result,
+        "warning": ({
+            "message": f"Command sent but device status not changing for {len(warnings)} lock(s)",
+            "count": len(warnings),
+            "devices": warnings,
+        } if warnings else None),
     })
 
 
@@ -956,6 +1115,22 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
         message=f"{cmd.title()} lock requested: {lock_name}",
         details={"device_id": str(device_id), "friendly_name": lock_name},
     )
+
+    warnings: list[dict] = []
+    verify = _verify_lock_transition(
+        client,
+        expected_states={str(device_id): _expected_lock_state(cmd)},
+        name_hints={str(device_id): str(lock_name)},
+        polls=4,
+        wait_seconds=3,
+    )
+    if not verify.get("ok"):
+        warnings = _record_lock_state_unchanged(
+            property_id=property_id,
+            action=cmd,
+            unresolved=verify.get("unresolved") or [],
+        )
+
     _schedule_collection_refresh(
         retries=4,
         wait_seconds=8,
@@ -968,6 +1143,7 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
         "device_id": str(device_id),
         "action": cmd,
         "result": result,
+        "warning": (warnings[0] if warnings else None),
     })
 
 

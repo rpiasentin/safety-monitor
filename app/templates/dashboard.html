@@ -652,7 +652,14 @@
               <div class="property-safety-list">
                 {% for lock in card.lock_devices %}
                 <div class="property-safety-row">
-                  <span class="property-safety-name">{{ lock.friendly_name }}</span>
+                  <div class="property-safety-name-wrap">
+                    <span class="property-safety-name">{{ lock.friendly_name }}</span>
+                    {% if lock.command_warning %}
+                    <span class="property-lock-warning">
+                      ⚠ command sent but status not changing
+                    </span>
+                    {% endif %}
+                  </div>
                   <span class="property-state-pill state-{{ lock.status }}">{{ lock.state_label }}</span>
                   <div class="property-row-actions">
                     <button onclick='runLockAction({{ card.id|tojson }}, "lock", {{ lock.entity_id|tojson }})'
@@ -938,7 +945,7 @@
 
       const statusEl = document.getElementById(`${pid}_lock_status`);
       if (statusEl) {
-        statusEl.classList.remove('hidden', 'text-green-400', 'text-red-400');
+        statusEl.classList.remove('hidden', 'text-green-400', 'text-red-400', 'text-yellow-300');
         statusEl.classList.add('text-gray-400');
         statusEl.textContent = `${verb} command in progress…`;
       }
@@ -965,15 +972,22 @@
         const attempted = Number(result.attempted ?? 1);
         const succeeded = Number(result.succeeded ?? attempted);
         const failed = Number(result.failed ?? Math.max(attempted - succeeded, 0));
+        const warning = data.warning || null;
         const summary = (deviceId === 'all')
           ? `✓ ${verb} sent to ${succeeded}/${attempted} lock${attempted === 1 ? '' : 's'}`
           : `✓ ${verb} command sent`;
 
         if (statusEl) {
-          statusEl.textContent = failed > 0 ? `${summary} (${failed} failed)` : summary;
-          statusEl.classList.replace('text-gray-400', 'text-green-400');
+          if (warning) {
+            const warnMsg = warning.message || 'Command sent but device status not changing';
+            statusEl.textContent = `⚠ ${warnMsg}`;
+            statusEl.classList.replace('text-gray-400', 'text-yellow-300');
+          } else {
+            statusEl.textContent = failed > 0 ? `${summary} (${failed} failed)` : summary;
+            statusEl.classList.replace('text-gray-400', 'text-green-400');
+          }
         }
-        setTimeout(() => window.location.reload(), 900);
+        setTimeout(() => window.location.reload(), warning ? 2200 : 900);
       } catch (e) {
         if (statusEl) {
           statusEl.textContent = `✗ ${e.message}`;
