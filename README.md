@@ -101,12 +101,13 @@ Cooldowns prevent repeat Pushover spam: 60 min (temp), 120 min (battery/offline)
 
 Completed:
 - Mobile-first UI refresh with larger thumb-safe controls and clearer property cards
-- Feed freshness boxes for Hubitat, EG4, and Victron on each property
+- Feed freshness boxes for Hubitat, Home Assistant, EG4, and Victron on each property
 - Property lock status panel with lock/unlock controls (`all` + per-lock actions)
 - Property smoke/CO status panel for each location card
 - Hubitat device auto-pruning when devices are removed upstream
 - Dedicated critical decision log page at `/decisions`
 - Persistent `system_events` decision trail in SQLite (operator/system actions)
+- Time-bounded stale Tesla/Powerwall fallback to keep HC energy cards visible during transient HA outages, with decision-log events
 
 Operational details:
 - Lock control endpoints:

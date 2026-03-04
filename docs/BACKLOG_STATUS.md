@@ -1,6 +1,6 @@
 # Safety Monitor Backlog Status
 
-Last updated: 2026-03-03
+Last updated: 2026-03-04
 
 ## Delivered In This Pass
 
@@ -30,6 +30,12 @@ Last updated: 2026-03-03
 5. Mobile usability pass
 - Kept thumb-safe control sizing for new lock actions.
 - Updated property safety rows for smaller screens.
+
+6. Home Assistant Tesla resilience
+- Added Home Assistant feed-health box support for properties using `ha_api`.
+- Added time-bounded stale Tesla/Powerwall fallback when HA feed is temporarily unavailable.
+- Added warning text on property cards while stale fallback is active.
+- Added decision-log event type: `stale_tesla_fallback_applied`.
 
 ## Suggested Next Slice
 

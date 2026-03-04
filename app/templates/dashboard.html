@@ -405,6 +405,15 @@
               {% endfor %}
             </div>
             {% endif %}
+            {% if card.source_warnings %}
+            <div class="feed-warning-wrap mt-2">
+              {% for warning in card.source_warnings %}
+              <div class="feed-warning-pill">
+                {{ warning.message or "Using recent cached feed values while live data is unavailable." }}
+              </div>
+              {% endfor %}
+            </div>
+            {% endif %}
           </div>
           <div class="flex items-center gap-2">
             {% if card.alert_count > 0 %}

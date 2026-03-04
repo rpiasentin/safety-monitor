@@ -670,6 +670,7 @@ async def dashboard(request: Request):
         source_rows: dict[str, dict | None] = {}
         for source_type, label in (
             ("hubitat_cloud", "Hubitat API response"),
+            ("ha_api", "Home Assistant API response"),
             ("eg4", "EG4 API response"),
             ("victron", "Victron API response"),
         ):
@@ -699,6 +700,7 @@ async def dashboard(request: Request):
         smoke_devices, smoke_counts = _decorate_smoke_devices(
             list(hub_payload.get("smoke_devices") or [])
         )
+        source_warnings = row.get("source_warnings") if isinstance(row.get("source_warnings"), list) else []
 
         cards.append({
             "id":             pid,
@@ -708,6 +710,7 @@ async def dashboard(request: Request):
             "reading":        row,
             "devices":        devs,
             "feed_health":    feed_health,
+            "source_warnings": source_warnings,
             "lock_devices":   lock_devices,
             "lock_counts":    lock_counts,
             "smoke_devices":  smoke_devices,

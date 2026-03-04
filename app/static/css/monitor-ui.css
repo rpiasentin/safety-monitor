@@ -339,6 +339,22 @@
   color: #ffc6cd;
 }
 
+.feed-warning-wrap {
+  display: grid;
+  gap: 0.32rem;
+}
+
+.feed-warning-pill {
+  border: 1px solid rgba(245, 198, 101, 0.68);
+  background: rgba(103, 75, 25, 0.38);
+  color: #ffd982;
+  border-radius: 10px;
+  padding: 0.32rem 0.52rem;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
 .property-body {
   display: grid;
   gap: 1rem;
@@ -808,6 +824,11 @@
     justify-content: space-between;
   }
 
+  .feed-warning-pill {
+    font-size: 0.64rem;
+    padding: 0.34rem 0.5rem;
+  }
+
   .property-energy-stats {
     width: 100%;
   }
@@ -958,6 +979,10 @@
 
   .feed-health-value {
     font-size: 0.68rem;
+  }
+
+  .feed-warning-pill {
+    font-size: 0.62rem;
   }
 
   .sensor-list-row {

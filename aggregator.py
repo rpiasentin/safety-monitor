@@ -3,8 +3,9 @@ DataAggregator — collects from all sources for one property,
 writes results to the DB, and returns a unified snapshot dict.
 """
 
+import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import db
@@ -14,6 +15,30 @@ from collectors.hubitat import HubitatCloudCollector
 from collectors.victron import VictronClient
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_utc_timestamp(raw_ts: str | None) -> datetime | None:
+    """Parse mixed timestamp formats and normalize to UTC."""
+    if not raw_ts:
+        return None
+    raw = str(raw_ts).strip()
+    if not raw:
+        return None
+
+    # SQLite timestamps are stored as "YYYY-MM-DD HH:MM:SS" in UTC.
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except Exception:
+        pass
+
+    # Fallback: ISO-8601 variants.
+    try:
+        ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts.astimezone(timezone.utc)
+    except Exception:
+        return None
 
 
 def _collector_for(property_id: str, coll_cfg: dict):
@@ -38,6 +63,15 @@ class PropertyCollector:
         self.prop_id   = prop_cfg["id"]
         self.prop_name = prop_cfg.get("name", self.prop_id)
         self.enabled   = prop_cfg.get("enabled", True)
+        self._last_stale_fallback_event_at: datetime | None = None
+        self._stale_fallback_max_minutes = max(
+            5,
+            int(prop_cfg.get("stale_fallback_max_minutes", 120)),
+        )
+        self._has_tesla_collector = any(
+            (c.get("type") == "ha_api") and bool(c.get("include_tesla", False))
+            for c in prop_cfg.get("collectors", [])
+        )
         self.collectors = []
         for coll_cfg in prop_cfg.get("collectors", []):
             c = _collector_for(self.prop_id, coll_cfg)
@@ -107,6 +141,7 @@ class PropertyCollector:
 
         # Build rolled-up fields (canonical field names matching db schema)
         snapshot.update(_rollup(snapshot["sources"]))
+        self._apply_stale_tesla_fallback(snapshot)
 
         # Persist one "merged" row that the dashboard queries — guarantees
         # a single complete row per property rather than one row per source.
@@ -114,6 +149,117 @@ class PropertyCollector:
             db.upsert_reading(self.prop_id, "merged", snapshot)
 
         return snapshot
+
+    def _apply_stale_tesla_fallback(self, snapshot: dict[str, Any]) -> None:
+        """
+        Keep Tesla/Powerwall dashboard fields populated during short HA outages by
+        borrowing only missing fields from the most recent merged snapshot.
+        """
+        if not self._has_tesla_collector:
+            return
+
+        missing_tesla_block = not (isinstance(snapshot.get("tesla"), dict) and snapshot.get("tesla"))
+        missing_energy_fields = any(
+            snapshot.get(field) is None
+            for field in ("soc", "load_power", "battery_charging_power", "grid_power", "grid_online")
+        )
+        if not (missing_tesla_block or missing_energy_fields):
+            return
+
+        prev = db.get_latest_reading(self.prop_id, source="merged")
+        if not prev:
+            return
+
+        prev_ts = _parse_utc_timestamp(prev.get("collected_at"))
+        if not prev_ts:
+            return
+        age = datetime.now(timezone.utc) - prev_ts
+        max_age = timedelta(minutes=self._stale_fallback_max_minutes)
+        if age > max_age:
+            return
+
+        try:
+            prev_raw = json.loads(prev.get("raw_json") or "{}")
+        except Exception:
+            prev_raw = {}
+        if not isinstance(prev_raw, dict):
+            return
+
+        fallback_fields = (
+            "tesla",
+            "soc",
+            "pv_total_power",
+            "load_power",
+            "power_to_user",
+            "battery_charging_power",
+            "grid_power",
+            "grid_online",
+        )
+        applied_fields: list[str] = []
+        for field in fallback_fields:
+            prev_val = prev_raw.get(field)
+            if prev_val is None:
+                continue
+            cur_val = snapshot.get(field)
+            if field == "tesla":
+                if isinstance(cur_val, dict) and cur_val:
+                    continue
+            elif cur_val is not None:
+                continue
+            snapshot[field] = prev_val
+            applied_fields.append(field)
+
+        if not applied_fields:
+            return
+
+        age_minutes = max(1, int(age.total_seconds() // 60))
+        snapshot.setdefault("source_warnings", []).append({
+            "type": "stale_fallback",
+            "source": "ha_api",
+            "status": "warning",
+            "age_minutes": age_minutes,
+            "applied_fields": sorted(applied_fields),
+            "message": (
+                f"Using recent Home Assistant Tesla values ({age_minutes}m old) "
+                "while live HA feed is unavailable."
+            ),
+        })
+        logger.warning(
+            "[%s] Applied stale Tesla fallback (%dm old): %s",
+            self.prop_id,
+            age_minutes,
+            ", ".join(sorted(applied_fields)),
+        )
+
+        now = datetime.now(timezone.utc)
+        if (
+            self._last_stale_fallback_event_at is None
+            or (now - self._last_stale_fallback_event_at) >= timedelta(minutes=15)
+        ):
+            try:
+                db.insert_system_event(
+                    event_type="stale_tesla_fallback_applied",
+                    level="warning",
+                    property_id=self.prop_id,
+                    actor="collector",
+                    message=(
+                        f"Applied stale Tesla fallback fields while HA feed is unavailable "
+                        f"({age_minutes}m old)"
+                    ),
+                    details={
+                        "source": "ha_api",
+                        "age_minutes": age_minutes,
+                        "fields": sorted(applied_fields),
+                        "max_age_minutes": self._stale_fallback_max_minutes,
+                    },
+                )
+                self._last_stale_fallback_event_at = now
+            except Exception:
+                logger.debug(
+                    "[%s] Failed to persist stale Tesla fallback decision event",
+                    self.prop_id,
+                    exc_info=True,
+                )
 
 
 def _coalesce(*vals):
