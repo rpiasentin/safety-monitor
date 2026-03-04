@@ -394,20 +394,93 @@
   padding: 0.92rem !important;
 }
 
-.property-energy-main {
+.property-energy-panel {
+  border: 1px solid rgba(132, 167, 199, 0.3);
+  border-radius: 12px;
+  background: rgba(15, 31, 49, 0.62);
+  padding: 0.6rem;
+  display: grid;
+  gap: 0.48rem;
+}
+
+.property-energy-title-row {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
-.property-energy-stats {
+.property-energy-title {
+  margin: 0;
+  font-size: 0.73rem;
+  font-weight: 700;
+  color: #d6ecff;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.property-energy-stamp {
+  font-size: 0.65rem;
+  color: #9eb8ce;
+}
+
+.property-energy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4rem;
+}
+
+.property-energy-tile {
+  border: 1px solid rgba(124, 162, 192, 0.26);
+  border-radius: 10px;
+  background: rgba(12, 25, 40, 0.52);
+  padding: 0.32rem 0.42rem;
   min-width: 0;
 }
 
-.property-generation {
-  border: 1px solid rgba(139, 177, 206, 0.25);
+.property-energy-tile.is-primary {
+  border-color: rgba(73, 196, 150, 0.54);
+  background: rgba(21, 72, 57, 0.42);
 }
 
-.property-two-col {
-  min-width: 0;
+.property-energy-label {
+  margin: 0;
+  font-size: 0.62rem;
+  line-height: 1.2;
+  color: #9eb8ce;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.property-energy-value {
+  margin: 0.16rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.15;
+  font-weight: 700;
+  color: #e7f6ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.property-energy-breakdown {
+  border-top: 1px solid rgba(124, 162, 192, 0.24);
+  padding-top: 0.36rem;
+  display: grid;
+  gap: 0.24rem;
+}
+
+.property-energy-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: #adc4d8;
+}
+
+.property-energy-line span:last-child {
+  color: #f7d38a;
+  font-weight: 700;
 }
 
 .property-temp-row {
@@ -889,12 +962,6 @@
     font-size: 1.6rem !important;
   }
 
-  .property-energy-main {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.7rem !important;
-  }
-
   .feed-health-box {
     width: 100%;
     justify-content: space-between;
@@ -905,17 +972,18 @@
     padding: 0.34rem 0.5rem;
   }
 
-  .property-energy-stats {
-    width: 100%;
+  .property-energy-panel {
+    padding: 0.52rem;
+    gap: 0.4rem;
   }
 
-  .property-energy-stats.grid.grid-cols-2 {
+  .property-energy-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem 0.7rem;
+    gap: 0.34rem;
   }
 
-  .property-two-col {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .property-energy-value {
+    font-size: 0.76rem;
   }
 
   .property-link-button {

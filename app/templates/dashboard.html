@@ -457,191 +457,142 @@
 
         <div class="p-5 space-y-5 property-body">
 
-          <!-- Solar section (fm only — has EG4/Victron) -->
-          {% if card.reading.get('soc') is not none %}
-          <div>
-            <p class="text-xs uppercase tracking-wider text-gray-500 mb-3 font-semibold">Solar / Battery</p>
-            <div class="flex items-center gap-6 property-energy-main">
-
-              <!-- SOC gauge -->
-              <div class="relative flex-shrink-0">
-                {% set soc = card.reading.get('soc', 0) %}
-                {% set r = 36 %}
-                {% set circ = (2 * 3.14159 * r)|round(1) %}
-                {% set offset = (circ * (1 - soc/100))|round(1) %}
-                {% set gauge_color = 'stroke-red-500' if soc < 10 else ('stroke-orange-500' if soc < 20 else ('stroke-yellow-400' if soc < 40 else 'stroke-green-500')) %}
-                <svg width="90" height="90" viewBox="0 0 90 90">
-                  <circle cx="45" cy="45" r="{{ r }}" fill="none" stroke="#374151" stroke-width="8"/>
-                  <circle cx="45" cy="45" r="{{ r }}" fill="none"
-                    class="{{ gauge_color }} soc-ring"
-                    stroke-width="8"
-                    stroke-dasharray="{{ circ }}"
-                    stroke-dashoffset="{{ offset }}"
-                    stroke-linecap="round"
-                    transform="rotate(-90 45 45)"/>
-                  <text x="45" y="49" text-anchor="middle"
-                    class="fill-white" font-size="16" font-weight="bold">{{ soc|int }}%</text>
-                </svg>
-              </div>
-
-              <!-- Readings -->
-              <div class="grid grid-cols-2 gap-x-6 gap-y-2 flex-1 property-energy-stats">
-                {% if card.reading.get('voltage') %}
-                <div>
-                  <p class="text-xs text-gray-500">Voltage</p>
-                  <p class="text-sm font-semibold">{{ fmt_voltage(card.reading.get('voltage')) }}</p>
-                </div>
-                {% endif %}
-
-                <!-- Battery charging power (Victron SmartShunt) -->
-                {% set chg = card.reading.get('battery_charging_power') %}
-                {% if chg is not none %}
-                <div>
-                  <p class="text-xs text-gray-500">Battery</p>
-                  {% if chg > 50 %}
-                    <p class="text-sm font-semibold text-green-400">⬆ {{ fmt_power(chg) }}</p>
-                  {% elif chg < -50 %}
-                    <p class="text-sm font-semibold text-yellow-400">⬇ {{ fmt_power(chg|abs) }}</p>
-                  {% else %}
-                    <p class="text-sm font-semibold text-gray-400">≈ 0 W</p>
-                  {% endif %}
-                </div>
-                {% elif card.reading.get('pv_power') %}
-                <div>
-                  <p class="text-xs text-gray-500">PV Power</p>
-                  <p class="text-sm font-semibold">{{ fmt_power(card.reading.get('pv_power')) }}</p>
-                </div>
-                {% endif %}
-
-                {% if card.reading.get('temperature') %}
-                <div>
-                  <p class="text-xs text-gray-500">Inverter Temp</p>
-                  <p class="text-sm font-semibold">{{ card.reading.get('temperature')|round(0)|int }}°C</p>
-                </div>
-                {% endif %}
-              </div>
+          {# Unified compact energy panel (solar + battery + tesla/powerwall) #}
+          {% set reading = card.reading or {} %}
+          {% set pv_eg4   = reading.get('pv_eg4') %}
+          {% set pv_eg4_1 = reading.get('pv_eg4_1') %}
+          {% set pv_eg4_2 = reading.get('pv_eg4_2') %}
+          {% set pv_v1    = reading.get('pv_victron_1') %}
+          {% set pv_v2    = reading.get('pv_victron_2') %}
+          {% set total_pv = reading.get('pv_total_power') or reading.get('pv_power') %}
+          {% set load     = reading.get('load_power') %}
+          {% set chg      = reading.get('battery_charging_power') %}
+          {% set grid_pwr = reading.get('grid_power') %}
+          {% set has_energy = (
+            reading.get('soc') is not none
+            or reading.get('voltage') is not none
+            or total_pv
+            or load is not none
+            or chg is not none
+            or grid_pwr is not none
+            or reading.get('temperature') is not none
+            or reading.get('tesla_soc') is not none
+            or reading.get('grid_online') is not none
+          ) %}
+          {% if has_energy %}
+          <div class="property-energy-panel">
+            <div class="property-energy-title-row">
+              <p class="property-energy-title">Energy Snapshot</p>
+              <span class="property-energy-stamp">{{ ago(reading.get('collected_at')) if reading.get('collected_at') else 'live' }}</span>
             </div>
 
-            <!-- Generation breakdown (EG4/Victron for FM; Tesla energy for HC) -->
-            {% set pv_eg4   = card.reading.get('pv_eg4') %}
-            {% set pv_eg4_1 = card.reading.get('pv_eg4_1') %}
-            {% set pv_eg4_2 = card.reading.get('pv_eg4_2') %}
-            {% set pv_v1    = card.reading.get('pv_victron_1') %}
-            {% set pv_v2    = card.reading.get('pv_victron_2') %}
-            {% set total_pv = card.reading.get('pv_total_power') or card.reading.get('pv_power') %}
-            {% set load     = card.reading.get('load_power') %}
-            {% if pv_eg4 is not none or pv_v1 is not none or pv_v2 is not none or total_pv or load is not none %}
-            <div class="mt-3 bg-gray-800 rounded-xl px-4 py-3 space-y-1.5 property-generation">
-              <p class="text-xs uppercase tracking-wider text-gray-500 font-semibold mb-2">Generation</p>
-              {% if pv_eg4_1 is not none %}
-              <div class="flex justify-between text-sm">
-                <span class="text-gray-400">EG4 String 1</span>
-                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_eg4_1) }}</span>
+            <div class="property-energy-grid">
+              {% if reading.get('soc') is not none %}
+              <div class="property-energy-tile is-primary">
+                <p class="property-energy-label">Battery SOC</p>
+                <p class="property-energy-value">{{ fmt_pct(reading.get('soc')) }}</p>
               </div>
+              {% endif %}
+
+              {% if total_pv %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">Total PV</p>
+                <p class="property-energy-value">{{ fmt_power(total_pv) }}</p>
+              </div>
+              {% endif %}
+
+              {% if load is not none %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">House Load</p>
+                <p class="property-energy-value">{{ fmt_power(load) }}</p>
+              </div>
+              {% endif %}
+
+              {% if chg is not none %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">Battery Flow</p>
+                {% if chg > 50 %}
+                  <p class="property-energy-value text-green-400">⬆ {{ fmt_power(chg) }}</p>
+                {% elif chg < -50 %}
+                  <p class="property-energy-value text-yellow-300">⬇ {{ fmt_power(chg|abs) }}</p>
+                {% else %}
+                  <p class="property-energy-value text-gray-300">≈ 0 W</p>
+                {% endif %}
+              </div>
+              {% endif %}
+
+              {% if grid_pwr is not none %}
+              {% set grid_label = 'Grid Export' if grid_pwr < 0 else 'Grid Import' %}
+              {% set grid_color = 'text-green-400' if grid_pwr < 0 else 'text-orange-300' %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">{{ grid_label }}</p>
+                <p class="property-energy-value {{ grid_color }}">{{ fmt_power(grid_pwr|abs) }}</p>
+              </div>
+              {% endif %}
+
+              {% if reading.get('voltage') is not none %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">Battery Voltage</p>
+                <p class="property-energy-value">{{ fmt_voltage(reading.get('voltage')) }}</p>
+              </div>
+              {% endif %}
+
+              {% if reading.get('temperature') is not none %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">Inverter Temp</p>
+                <p class="property-energy-value">{{ reading.get('temperature')|round(0)|int }}°C</p>
+              </div>
+              {% endif %}
+
+              {% if reading.get('tesla_soc') is not none and reading.get('grid_online') is none %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">Tesla Battery</p>
+                <p class="property-energy-value">{{ fmt_pct(reading.get('tesla_soc')) }}</p>
+              </div>
+              {% endif %}
+
+              {% if reading.get('tesla_soc') is not none and reading.get('grid_online') is none %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">Tesla Status</p>
+                {% if reading.get('tesla_charging') %}
+                  <p class="property-energy-value text-green-400">⚡ {{ "%.1f kW"|format(reading.get('tesla_power_kw', 0)) }}</p>
+                {% else %}
+                  <p class="property-energy-value text-gray-300">Idle</p>
+                {% endif %}
+              </div>
+              {% endif %}
+
+              {% if reading.get('grid_online') is not none %}
+              <div class="property-energy-tile">
+                <p class="property-energy-label">Grid Status</p>
+                {% if reading.get('grid_online') %}
+                  <p class="property-energy-value text-green-400">Online</p>
+                {% else %}
+                  <p class="property-energy-value text-red-400">Offline</p>
+                {% endif %}
+              </div>
+              {% endif %}
+            </div>
+
+            {% if pv_eg4 is not none or pv_eg4_1 is not none or pv_eg4_2 is not none or pv_v1 is not none or pv_v2 is not none %}
+            <div class="property-energy-breakdown">
+              {% if pv_eg4_1 is not none %}
+              <div class="property-energy-line"><span>EG4 String 1</span><span>{{ fmt_power(pv_eg4_1) }}</span></div>
               {% endif %}
               {% if pv_eg4_2 is not none %}
-              <div class="flex justify-between text-sm">
-                <span class="text-gray-400">EG4 String 2</span>
-                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_eg4_2) }}</span>
-              </div>
+              <div class="property-energy-line"><span>EG4 String 2</span><span>{{ fmt_power(pv_eg4_2) }}</span></div>
               {% endif %}
               {% if pv_eg4 is not none and pv_eg4_1 is none %}
-              {# Fallback: no per-string data, just show EG4 total #}
-              <div class="flex justify-between text-sm">
-                <span class="text-gray-400">EG4 MPPT</span>
-                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_eg4) }}</span>
-              </div>
+              <div class="property-energy-line"><span>EG4 MPPT</span><span>{{ fmt_power(pv_eg4) }}</span></div>
               {% endif %}
               {% if pv_v1 is not none %}
-              <div class="flex justify-between text-sm">
-                <span class="text-gray-400">Victron #1 (288)</span>
-                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_v1) }}</span>
-              </div>
+              <div class="property-energy-line"><span>Victron #1 (288)</span><span>{{ fmt_power(pv_v1) }}</span></div>
               {% endif %}
               {% if pv_v2 is not none %}
-              <div class="flex justify-between text-sm">
-                <span class="text-gray-400">Victron #2 (289)</span>
-                <span class="font-semibold text-yellow-300">{{ fmt_power(pv_v2) }}</span>
-              </div>
-              {% endif %}
-              {% if total_pv %}
-              <div class="flex justify-between text-sm border-t border-gray-700 pt-1.5 mt-1">
-                <span class="text-gray-300 font-semibold">Total PV</span>
-                <span class="font-bold text-white">{{ fmt_power(total_pv) }}</span>
-              </div>
-              {% endif %}
-              {% if load is not none %}
-              <div class="flex justify-between text-sm border-t border-gray-700 pt-1.5 mt-1">
-                <span class="text-gray-400">House Load</span>
-                <span class="font-semibold text-blue-300">{{ fmt_power(load) }}</span>
-              </div>
-              {% endif %}
-              {% set grid_pwr = card.reading.get('grid_power') %}
-              {% if grid_pwr is not none %}
-              {% set grid_color = 'text-green-400' if grid_pwr < 0 else 'text-orange-300' %}
-              {% set grid_label = 'Grid Export' if grid_pwr < 0 else 'Grid Import' %}
-              <div class="flex justify-between text-sm border-t border-gray-700 pt-1.5 mt-1">
-                <span class="text-gray-400">{{ grid_label }}</span>
-                <span class="font-semibold {{ grid_color }}">{{ fmt_power(grid_pwr|abs) }}</span>
-              </div>
+              <div class="property-energy-line"><span>Victron #2 (289)</span><span>{{ fmt_power(pv_v2) }}</span></div>
               {% endif %}
             </div>
             {% endif %}
-
-          </div>
-          {% endif %}
-
-          <!-- Tesla section (vehicle or Powerwall depending on integration type) -->
-          {% if card.reading.get('tesla_soc') is not none and card.reading.get('grid_online') is none %}
-          {# Vehicle Tesla — shows car SOC and charging status #}
-          <div>
-            <p class="text-xs uppercase tracking-wider text-gray-500 mb-3 font-semibold">Tesla</p>
-            <div class="flex items-center gap-4">
-              <span class="text-3xl">🚗</span>
-              <div class="grid grid-cols-2 gap-x-6 gap-y-1 property-two-col">
-                <div>
-                  <p class="text-xs text-gray-500">Battery</p>
-                  <p class="text-sm font-semibold">{{ fmt_pct(card.reading.get('tesla_soc')) }}</p>
-                </div>
-                {% if card.reading.get('tesla_charging') %}
-                <div>
-                  <p class="text-xs text-gray-500">Charging</p>
-                  <p class="text-sm font-semibold text-green-400">
-                    ⚡ {{ "%.1f kW"|format(card.reading.get('tesla_power_kw', 0)) }}
-                  </p>
-                </div>
-                {% else %}
-                <div>
-                  <p class="text-xs text-gray-500">Status</p>
-                  <p class="text-sm font-semibold text-gray-400">Idle</p>
-                </div>
-                {% endif %}
-              </div>
-            </div>
-          </div>
-          {% endif %}
-
-          {% if card.reading.get('grid_online') is not none %}
-          {# Powerwall / Tesla Energy — shows backup reserve and grid status #}
-          <div>
-            <p class="text-xs uppercase tracking-wider text-gray-500 mb-3 font-semibold">Powerwall</p>
-            <div class="flex items-center gap-4">
-              <span class="text-3xl">🔋</span>
-              <div class="grid grid-cols-2 gap-x-6 gap-y-1 property-two-col">
-                <div>
-                  <p class="text-xs text-gray-500">Charge</p>
-                  <p class="text-sm font-semibold">{{ fmt_pct(card.reading.get('soc')) }}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-gray-500">Grid</p>
-                  {% if card.reading.get('grid_online') %}
-                  <p class="text-sm font-semibold text-green-400">Online</p>
-                  {% else %}
-                  <p class="text-sm font-semibold text-red-400">⚠ Offline</p>
-                  {% endif %}
-                </div>
-              </div>
-            </div>
           </div>
           {% endif %}
 
