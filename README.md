@@ -16,10 +16,11 @@ collectors/
   eg4.py           EG4 inverter via raw TCP SolarmanV5 banner (port 8000)
   victron.py       Victron Venus OS via MQTT (port 1883)
   ha_api.py        Home Assistant REST API — temps, Tesla, Hubitat via HACS
-  hubitat.py       Hubitat cloud API — Redwood (no local HA)
+  hubitat.py       Hubitat cloud API, lock/smoke state extraction, lock commands
 
 app/templates/
   dashboard.html   Tailwind dark dashboard, auto-refreshes 60s
+  system_decisions.html  Critical decision/event trace page
 ```
 
 ## Properties
@@ -95,6 +96,25 @@ See `.env.example` for full list. Minimum required:
 | Source offline | No data > 30 min | ✓ |
 
 Cooldowns prevent repeat Pushover spam: 60 min (temp), 120 min (battery/offline).
+
+## Backlog Delivery (March 2026)
+
+Completed:
+- Mobile-first UI refresh with larger thumb-safe controls and clearer property cards
+- Feed freshness boxes for Hubitat, EG4, and Victron on each property
+- Property lock status panel with lock/unlock controls (`all` + per-lock actions)
+- Property smoke/CO status panel for each location card
+- Hubitat device auto-pruning when devices are removed upstream
+- Dedicated critical decision log page at `/decisions`
+- Persistent `system_events` decision trail in SQLite (operator/system actions)
+
+Operational details:
+- Lock control endpoints:
+  - `POST /api/property/{property_id}/locks/all/{lock|unlock}`
+  - `POST /api/property/{property_id}/locks/{device_id}/{lock|unlock}`
+- Decision log API endpoint:
+  - `GET /api/system/decisions`
+- Device pruning is conservative: if Hubitat returns an empty/unusable payload, prune is skipped to avoid accidental mass removal.
 
 ## Update deployed app
 

@@ -5,6 +5,7 @@ All reads/writes go through this module.
 Schema:
   readings        — one row per collection run per source per property
   hubitat_devices — latest battery level per device per property
+  system_events   — critical system decisions and operator actions
   alerts          — triggered alert history with cooldown tracking
 """
 
@@ -79,6 +80,22 @@ CREATE INDEX IF NOT EXISTS idx_readings_property_time
     ON readings(property_id, collected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_property_time
     ON alerts(property_id, triggered_at DESC);
+
+CREATE TABLE IF NOT EXISTS system_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at      TEXT    NOT NULL,
+    level           TEXT    NOT NULL,
+    event_type      TEXT    NOT NULL,
+    property_id     TEXT,
+    actor           TEXT,
+    message         TEXT    NOT NULL,
+    details_json    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_events_created
+    ON system_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_system_events_type
+    ON system_events(event_type, created_at DESC);
 """
 
 
@@ -250,22 +267,51 @@ def get_temperature_history(property_id: str, sensor_name: str, hours: int = 24,
 # ── Hubitat devices ───────────────────────────────────────────────────────────
 
 def upsert_hubitat_devices(property_id: str, devices: list[dict],
-                            path: str = DB_PATH) -> None:
+                            prune_missing: bool = True,
+                            path: str = DB_PATH) -> dict[str, int]:
+    """
+    Upsert latest Hubitat device snapshot for one property.
+
+    Also prunes rows for devices that disappeared upstream so removed devices
+    no longer appear in dashboard/device activity views.
+
+    Safety behavior: when the upstream payload is empty/unusable, no prune is
+    performed to avoid accidental mass deletion during transient API failures.
+    """
     now = _now()
+    seen_ids: set[str] = set()
+    upserted = 0
+    pruned = 0
+
     with get_conn(path) as conn:
-        for d in devices:
+        for d in (devices or []):
+            entity_id = str(d.get("entity_id", "")).strip()
+            if not entity_id or entity_id in seen_ids:
+                continue
+            seen_ids.add(entity_id)
             conn.execute("""
                 INSERT OR REPLACE INTO hubitat_devices
                   (property_id, entity_id, friendly_name, battery_pct,
                    last_activity, device_type, collected_at)
                 VALUES (?,?,?,?,?,?,?)
             """, (property_id,
-                  d.get("entity_id", ""),
+                  entity_id,
                   d.get("friendly_name", ""),
                   d.get("battery_pct"),
                   d.get("last_activity"),
                   d.get("device_type") or d.get("type", ""),
                   now))
+            upserted += 1
+
+        if prune_missing and seen_ids:
+            placeholders = ",".join("?" for _ in seen_ids)
+            sql = f"""DELETE FROM hubitat_devices
+                     WHERE property_id=?
+                       AND entity_id NOT IN ({placeholders})"""
+            cur = conn.execute(sql, (property_id, *sorted(seen_ids)))
+            pruned = int(cur.rowcount or 0)
+
+    return {"upserted": upserted, "pruned": pruned}
 
 
 def get_hubitat_devices(property_id: str | None = None,
@@ -495,6 +541,68 @@ def find_active_alert(property_id: str,
                 LIMIT 1
             """, (property_id, alert_type, sensor_id)).fetchone()
     return dict(row) if row else None
+
+
+# ── System events / decision log ──────────────────────────────────────────────
+
+def insert_system_event(event_type: str,
+                        message: str,
+                        level: str = "info",
+                        property_id: str | None = None,
+                        actor: str | None = "system",
+                        details: dict | None = None,
+                        path: str = DB_PATH) -> int:
+    """Persist a critical system decision / operator action event."""
+    details_json = json.dumps(details, ensure_ascii=True, sort_keys=True) if details is not None else None
+    with get_conn(path) as conn:
+        cur = conn.execute("""
+            INSERT INTO system_events
+              (created_at, level, event_type, property_id, actor, message, details_json)
+            VALUES (?,?,?,?,?,?,?)
+        """, (_now(),
+              str(level or "info").strip().lower(),
+              str(event_type or "unknown").strip().lower(),
+              property_id,
+              actor,
+              message,
+              details_json))
+        return int(cur.lastrowid)
+
+
+def get_system_events(limit: int = 200,
+                      level: str | None = None,
+                      property_id: str | None = None,
+                      event_type: str | None = None,
+                      path: str = DB_PATH) -> list[dict]:
+    """Return newest system decision events first."""
+    where = []
+    params: list = []
+
+    if level:
+        where.append("level=?")
+        params.append(str(level).strip().lower())
+    if property_id:
+        where.append("property_id=?")
+        params.append(property_id)
+    if event_type:
+        where.append("event_type=?")
+        params.append(str(event_type).strip().lower())
+
+    sql = "SELECT * FROM system_events"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY id DESC"
+
+    try:
+        lim = max(1, min(int(limit), 1000))
+    except Exception:
+        lim = 200
+    sql += " LIMIT ?"
+    params.append(lim)
+
+    with get_conn(path) as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_latest_merged_all(path: str = DB_PATH) -> dict[str, dict]:

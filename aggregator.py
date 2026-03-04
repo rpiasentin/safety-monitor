@@ -81,7 +81,29 @@ class PropertyCollector:
             # fall back to battery_devices for backwards compat.
             devices = data.get("all_devices") or data.get("battery_devices", [])
             if devices:
-                db.upsert_hubitat_devices(self.prop_id, devices)
+                prune_missing = bool(data.get("all_devices")) and ctype == "hubitat_cloud"
+                sync = db.upsert_hubitat_devices(
+                    self.prop_id,
+                    devices,
+                    prune_missing=prune_missing,
+                )
+                pruned = int(sync.get("pruned", 0))
+                if pruned > 0:
+                    logger.warning("[%s] pruned %d removed Hubitat device(s)", self.prop_id, pruned)
+                    try:
+                        db.insert_system_event(
+                            event_type="hubitat_device_prune",
+                            level="warning",
+                            property_id=self.prop_id,
+                            actor="collector",
+                            message=f"Pruned {pruned} removed Hubitat device(s)",
+                            details={
+                                "pruned": pruned,
+                                "upserted": int(sync.get("upserted", 0)),
+                            },
+                        )
+                    except Exception:
+                        logger.debug("[%s] failed to persist prune decision event", self.prop_id, exc_info=True)
 
         # Build rolled-up fields (canonical field names matching db schema)
         snapshot.update(_rollup(snapshot["sources"]))
@@ -162,6 +184,10 @@ def _rollup(sources: dict) -> dict:
     # Water/leak sensors (latched critical alert uses these states)
     out["water_sensors"] = (ha.get("water_sensors") or []) + \
                              (hub.get("water_sensors") or [])
+
+    # Property security/safety rollups (currently from Hubitat cloud feeds)
+    out["lock_devices"] = list(hub.get("lock_devices") or [])
+    out["smoke_devices"] = list(hub.get("smoke_devices") or [])
 
     # Tesla (only from ha_api, High Country)
     out["tesla"] = ha.get("tesla")

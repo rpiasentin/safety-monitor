@@ -381,6 +381,141 @@
   padding-bottom: 0;
 }
 
+.property-safety-panel {
+  border: 1px solid rgba(132, 167, 199, 0.28);
+  border-radius: 12px;
+  background: rgba(15, 31, 49, 0.56);
+  padding: 0.55rem;
+}
+
+.property-safety-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.property-safety-title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #d6ecff;
+  letter-spacing: 0.02em;
+}
+
+.property-safety-meta {
+  font-size: 0.67rem;
+  color: #97b2c9;
+}
+
+.property-lock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+  margin-bottom: 0.5rem;
+}
+
+.property-action-btn {
+  border: 1px solid rgba(128, 168, 200, 0.4);
+  background: rgba(26, 48, 72, 0.76);
+  color: #e7f4ff;
+  border-radius: 9px;
+  min-height: 34px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+.property-action-btn.action-lock {
+  border-color: rgba(72, 197, 148, 0.58);
+  background: rgba(20, 84, 61, 0.5);
+}
+
+.property-action-btn.action-unlock {
+  border-color: rgba(235, 124, 132, 0.58);
+  background: rgba(94, 36, 45, 0.48);
+}
+
+.property-action-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.property-safety-list {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.property-safety-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.3rem 0.34rem;
+  border-radius: 10px;
+  border: 1px solid rgba(124, 162, 192, 0.22);
+  background: rgba(12, 25, 40, 0.5);
+}
+
+.property-safety-name {
+  font-size: 0.78rem;
+  color: #d2e7f7;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.property-row-actions {
+  display: inline-flex;
+  gap: 0.32rem;
+}
+
+.property-state-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border-radius: 999px;
+  padding: 0.14rem 0.52rem;
+  border: 1px solid rgba(138, 174, 204, 0.48);
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.property-state-pill.state-good {
+  color: #9af1cc;
+  border-color: rgba(69, 219, 166, 0.58);
+  background: rgba(26, 91, 69, 0.44);
+}
+
+.property-state-pill.state-warning {
+  color: #ffdf99;
+  border-color: rgba(245, 198, 101, 0.68);
+  background: rgba(106, 79, 31, 0.48);
+}
+
+.property-state-pill.state-critical {
+  color: #ffc8ce;
+  border-color: rgba(249, 126, 136, 0.72);
+  background: rgba(104, 36, 44, 0.52);
+}
+
+.property-state-pill.state-unknown {
+  color: #c8d6e4;
+  border-color: rgba(144, 170, 194, 0.45);
+  background: rgba(68, 82, 99, 0.42);
+}
+
+.property-inline-status {
+  margin-top: 0.42rem;
+  font-size: 0.71rem;
+}
+
 .property-empty {
   border: 1px dashed rgba(137, 170, 197, 0.4);
   border-radius: 14px;
@@ -599,6 +734,7 @@
   .monitor-button,
   .quick-jump-link,
   .sensor-graph-btn,
+  .property-action-btn,
   .alert-clear-btn,
   .settings-close-btn,
   .monitor-settings button {
@@ -689,7 +825,7 @@
     bottom: calc(0.72rem + env(safe-area-inset-bottom, 0px));
     z-index: 72;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.48rem;
     padding: 0.56rem;
     border-radius: 16px;
@@ -697,6 +833,27 @@
     background: rgba(7, 16, 27, 0.92);
     box-shadow: 0 16px 30px rgba(2, 9, 18, 0.45);
     backdrop-filter: blur(8px);
+  }
+
+  .property-safety-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name state"
+      "actions actions";
+    gap: 0.35rem 0.45rem;
+    padding: 0.45rem;
+  }
+
+  .property-safety-name {
+    grid-area: name;
+  }
+
+  .property-state-pill {
+    grid-area: state;
+  }
+
+  .property-row-actions {
+    grid-area: actions;
   }
 
   .device-head {
@@ -740,6 +897,10 @@
 }
 
 @media (max-width: 640px) {
+  .dashboard-page .mobile-thumb-dock {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .monitor-nav-link {
     font-size: 0.72rem;
     padding-left: 0.6rem;

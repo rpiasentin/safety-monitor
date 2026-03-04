@@ -36,6 +36,9 @@
       {% endif %}
       <span id="clock" class="monitor-chip monitor-clock font-mono tabular-nums px-2.5 py-1 rounded-full"></span>
       <span class="text-gray-600">auto-refresh 60s</span>
+      <a href="/decisions"
+        class="monitor-button text-gray-200 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-xs sm:text-sm font-medium border border-gray-700 hover:border-gray-500"
+        title="Critical system decisions log">Decisions</a>
       <button onclick="toggleSettings()" id="settings-btn"
         class="monitor-button text-gray-200 hover:text-white px-3 py-1.5 rounded-lg hover:bg-gray-800 transition-colors text-xs sm:text-sm font-medium border border-gray-700 hover:border-gray-500"
         title="Alert rule settings">⚙ Alert Rules</button>
@@ -628,6 +631,75 @@
           </div>
           {% endif %}
 
+          {% if card.lock_devices or card.smoke_devices %}
+          <div>
+            <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">Property Safety</p>
+
+            {% if card.lock_devices %}
+            <div class="property-safety-panel mb-3">
+              <div class="property-safety-head">
+                <span class="property-safety-title">Locks</span>
+                <span class="property-safety-meta">
+                  {{ card.lock_counts.locked }} locked · {{ card.lock_counts.unlocked }} unlocked
+                </span>
+              </div>
+              <div class="property-lock-actions">
+                <button onclick='runLockAction({{ card.id|tojson }}, "lock", "all")'
+                        class="property-action-btn action-lock">Lock all</button>
+                <button onclick='runLockAction({{ card.id|tojson }}, "unlock", "all")'
+                        class="property-action-btn action-unlock">Unlock all</button>
+              </div>
+              <div class="property-safety-list">
+                {% for lock in card.lock_devices %}
+                <div class="property-safety-row">
+                  <span class="property-safety-name">{{ lock.friendly_name }}</span>
+                  <span class="property-state-pill state-{{ lock.status }}">{{ lock.state_label }}</span>
+                  <div class="property-row-actions">
+                    <button onclick='runLockAction({{ card.id|tojson }}, "lock", {{ lock.entity_id|tojson }})'
+                            class="property-action-btn action-lock"
+                            {% if not lock.can_lock %}disabled{% endif %}>
+                      Lock
+                    </button>
+                    <button onclick='runLockAction({{ card.id|tojson }}, "unlock", {{ lock.entity_id|tojson }})'
+                            class="property-action-btn action-unlock"
+                            {% if not lock.can_unlock %}disabled{% endif %}>
+                      Unlock
+                    </button>
+                  </div>
+                </div>
+                {% endfor %}
+              </div>
+              <div id="{{ card.id }}_lock_status" class="property-inline-status hidden"></div>
+            </div>
+            {% endif %}
+
+            {% if card.smoke_devices %}
+            <div class="property-safety-panel">
+              <div class="property-safety-head">
+                <span class="property-safety-title">Smoke / CO</span>
+                <span class="property-safety-meta">
+                  {% if card.smoke_counts.critical > 0 %}
+                    {{ card.smoke_counts.critical }} alarm
+                  {% elif card.smoke_counts.warning > 0 %}
+                    {{ card.smoke_counts.warning }} warning
+                  {% else %}
+                    clear
+                  {% endif %}
+                </span>
+              </div>
+              <div class="property-safety-list">
+                {% for sensor in card.smoke_devices %}
+                <div class="property-safety-row">
+                  <span class="property-safety-name">{{ sensor.friendly_name }}</span>
+                  <span class="property-state-pill state-{{ sensor.status }}">{{ sensor.state_label }}</span>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            {% endif %}
+          </div>
+          {% endif %}
+
           <!-- Device batteries -->
           {% if card.devices %}
           <div>
@@ -652,15 +724,7 @@
           {% endif %}
 
           <!-- Device activity link -->
-          {% set has_hubitat = namespace(found=false) %}
-          {% for c in config.properties %}
-            {% if c.id == card.id %}
-              {% for col in c.collectors %}
-                {% if col.type == 'hubitat_cloud' %}{% set has_hubitat.found = true %}{% endif %}
-              {% endfor %}
-            {% endif %}
-          {% endfor %}
-          {% if has_hubitat.found %}
+          {% if card.has_hubitat %}
           <a href="/devices/{{ card.id }}"
              class="monitor-link-row property-link-button flex items-center justify-between text-xs text-gray-300 hover:text-blue-300 transition-colors mt-1 pt-2 border-t border-gray-800 group">
             <span>📟 Device activity</span>
@@ -739,6 +803,7 @@
     <button class="thumb-dock-btn" onclick="toggleSettings()">Alert Rules</button>
     <a class="thumb-dock-btn" href="#summary-section">Summary</a>
     <a class="thumb-dock-btn" href="{% if alerts %}#alerts-section{% else %}#summary-section{% endif %}">Alerts</a>
+    <a class="thumb-dock-btn" href="/decisions">Decisions</a>
     <a class="thumb-dock-btn" href="#dashboard-top">Top</a>
   </nav>
 
@@ -863,6 +928,59 @@
           alert(`Reboot failed: ${e.message}`);
         }
         if (btn) btn.disabled = false;
+      }
+    }
+
+    async function runLockAction(pid, action, deviceId = 'all') {
+      const verb = action === 'unlock' ? 'Unlock' : 'Lock';
+      const target = deviceId === 'all' ? `all locks for ${pid}` : `lock ${deviceId} at ${pid}`;
+      if (!confirm(`${verb} ${target}?`)) return;
+
+      const statusEl = document.getElementById(`${pid}_lock_status`);
+      if (statusEl) {
+        statusEl.classList.remove('hidden', 'text-green-400', 'text-red-400');
+        statusEl.classList.add('text-gray-400');
+        statusEl.textContent = `${verb} command in progress…`;
+      }
+
+      const url = (deviceId === 'all')
+        ? `/api/property/${encodeURIComponent(pid)}/locks/all/${encodeURIComponent(action)}`
+        : `/api/property/${encodeURIComponent(pid)}/locks/${encodeURIComponent(deviceId)}/${encodeURIComponent(action)}`;
+
+      try {
+        const resp = await fetch(url, { method: 'POST' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          const msg = data.error || resp.status;
+          if (statusEl) {
+            statusEl.textContent = `✗ ${msg}`;
+            statusEl.classList.replace('text-gray-400', 'text-red-400');
+          } else {
+            alert(`${verb} failed: ${msg}`);
+          }
+          return;
+        }
+
+        const result = data.result || {};
+        const attempted = Number(result.attempted ?? 1);
+        const succeeded = Number(result.succeeded ?? attempted);
+        const failed = Number(result.failed ?? Math.max(attempted - succeeded, 0));
+        const summary = (deviceId === 'all')
+          ? `✓ ${verb} sent to ${succeeded}/${attempted} lock${attempted === 1 ? '' : 's'}`
+          : `✓ ${verb} command sent`;
+
+        if (statusEl) {
+          statusEl.textContent = failed > 0 ? `${summary} (${failed} failed)` : summary;
+          statusEl.classList.replace('text-gray-400', 'text-green-400');
+        }
+        setTimeout(() => window.location.reload(), 900);
+      } catch (e) {
+        if (statusEl) {
+          statusEl.textContent = `✗ ${e.message}`;
+          statusEl.classList.replace('text-gray-400', 'text-red-400');
+        } else {
+          alert(`${verb} failed: ${e.message}`);
+        }
       }
     }
 

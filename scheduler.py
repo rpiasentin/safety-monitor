@@ -72,6 +72,15 @@ def collect_all() -> bool:
     """
     if not _collect_lock.acquire(blocking=False):
         logger.warning("collect_all: previous run still in progress — skipping this trigger")
+        try:
+            db.insert_system_event(
+                event_type="collection_skipped_lock",
+                level="warning",
+                actor="scheduler",
+                message="Skipped collection trigger because a previous run is still in progress",
+            )
+        except Exception:
+            logger.debug("Failed to persist collection skip decision event", exc_info=True)
         return False
     try:
         logger.info("=== Collection run starting at %s ===",

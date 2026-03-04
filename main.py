@@ -33,6 +33,7 @@ from fastapi.templating import Jinja2Templates
 import db
 import formatters
 import scheduler
+from collectors.hubitat import HubitatCloudClient
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -290,13 +291,169 @@ def _collect_container_health(config: dict) -> dict:
     }
 
 
+def _record_system_event(event_type: str,
+                         message: str,
+                         level: str = "info",
+                         property_id: str | None = None,
+                         actor: str = "api",
+                         details: dict | None = None) -> None:
+    """Best-effort persistence for critical system decisions/actions."""
+    try:
+        db.insert_system_event(
+            event_type=event_type,
+            message=message,
+            level=level,
+            property_id=property_id,
+            actor=actor,
+            details=details,
+        )
+    except Exception:
+        logger.debug("Failed to persist system event: %s", event_type, exc_info=True)
+
+
+def _parse_raw_payload(row: dict | None) -> dict:
+    if not row:
+        return {}
+    raw = row.get("raw_json")
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def _get_property_cfg(property_id: str) -> dict | None:
+    return next(
+        (p for p in CONFIG.get("properties", []) if p.get("id") == property_id),
+        None,
+    )
+
+
+def _hubitat_client_for_property(property_id: str) -> HubitatCloudClient | None:
+    prop = _get_property_cfg(property_id)
+    if not prop:
+        return None
+    coll_cfg = next(
+        (c for c in prop.get("collectors", []) if c.get("type") == "hubitat_cloud"),
+        None,
+    )
+    if not coll_cfg or not coll_cfg.get("endpoint"):
+        return None
+
+    token = (
+        coll_cfg.get("token")
+        or os.getenv(f"HUBITAT_{property_id.upper()}_TOKEN")
+        or os.getenv("HUBITAT_CLOUD_TOKEN", "")
+    )
+    return HubitatCloudClient(coll_cfg["endpoint"], api_token=token)
+
+
+def _schedule_collection_refresh(retries: int = 3, wait_seconds: int = 5) -> None:
+    """Background refresh helper used after control-plane actions."""
+    retries = max(1, int(retries))
+    wait_seconds = max(1, int(wait_seconds))
+
+    def _refresh_with_retry():
+        for _ in range(retries):
+            if scheduler.collect_all():
+                return
+            time.sleep(wait_seconds)
+
+    threading.Thread(target=_refresh_with_retry, daemon=True).start()
+
+
+def _decorate_lock_devices(lock_devices: list[dict]) -> tuple[list[dict], dict]:
+    decorated = []
+    counts = {"locked": 0, "unlocked": 0, "other": 0}
+    for lock in (lock_devices or []):
+        row = dict(lock)
+        state = str(row.get("state") or "unknown").strip().lower()
+        if state == "locked":
+            status = "good"
+            state_label = "Locked"
+            counts["locked"] += 1
+        elif state == "unlocked":
+            status = "critical"
+            state_label = "Unlocked"
+            counts["unlocked"] += 1
+        elif state in {"locking", "unlocking"}:
+            status = "warning"
+            state_label = state.title()
+            counts["other"] += 1
+        else:
+            status = "unknown"
+            state_label = state.replace("_", " ").title() if state else "Unknown"
+            counts["other"] += 1
+        row["status"] = status
+        row["state_label"] = state_label
+        decorated.append(row)
+    return decorated, counts
+
+
+def _decorate_smoke_devices(smoke_devices: list[dict]) -> tuple[list[dict], dict]:
+    decorated = []
+    counts = {"critical": 0, "warning": 0, "good": 0, "unknown": 0}
+    for sensor in (smoke_devices or []):
+        row = dict(sensor)
+        status = str(row.get("status") or "unknown").strip().lower()
+        if status not in counts:
+            status = "unknown"
+        counts[status] += 1
+
+        state = str(row.get("state") or "unknown").strip().lower()
+        if state == "alarm":
+            state_label = "ALARM"
+        elif state == "clear":
+            state_label = "Clear"
+        elif state == "test":
+            state_label = "Test"
+        else:
+            state_label = state.replace("_", " ").title() if state else "Unknown"
+
+        row["status"] = status
+        row["state_label"] = state_label
+        decorated.append(row)
+
+    return decorated, counts
+
+
+def _decode_system_event_rows(rows: list[dict]) -> list[dict]:
+    out = []
+    for row in rows:
+        item = dict(row)
+        raw_details = item.get("details_json")
+        details = None
+        if raw_details:
+            try:
+                details = json.loads(raw_details)
+            except Exception:
+                details = {"raw": str(raw_details)}
+        item["details"] = details
+        out.append(item)
+    return out
+
+
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Safety Monitor starting up...")
     scheduler.start(CONFIG)
+    _record_system_event(
+        event_type="service_started",
+        level="info",
+        actor="service",
+        message="Safety Monitor service started",
+    )
     yield
+    _record_system_event(
+        event_type="service_stopping",
+        level="warning",
+        actor="service",
+        message="Safety Monitor service shutting down",
+    )
     logger.info("Safety Monitor shutting down...")
     scheduler.stop()
 
@@ -380,6 +537,7 @@ async def dashboard(request: Request):
         pt = row.get("primary_temp")
         ts = formatters.temp_status(pt)
         feed_health = []
+        source_rows: dict[str, dict | None] = {}
         for source_type, label in (
             ("hubitat_cloud", "Hubitat API response"),
             ("eg4", "EG4 API response"),
@@ -388,17 +546,31 @@ async def dashboard(request: Request):
             if source_type not in collector_types:
                 continue
             source_row = db.get_latest_reading(pid, source=source_type)
+            source_rows[source_type] = source_row
             feed_health.append(_collector_feed_health(
                 label, source_row.get("collected_at") if source_row else None
             ))
+
+        hub_payload = _parse_raw_payload(source_rows.get("hubitat_cloud"))
+        lock_devices, lock_counts = _decorate_lock_devices(
+            list(hub_payload.get("lock_devices") or [])
+        )
+        smoke_devices, smoke_counts = _decorate_smoke_devices(
+            list(hub_payload.get("smoke_devices") or [])
+        )
 
         cards.append({
             "id":             pid,
             "name":           p.get("name", pid),
             "enabled":        p.get("enabled", True),
+            "has_hubitat":    "hubitat_cloud" in collector_types,
             "reading":        row,
             "devices":        devs,
             "feed_health":    feed_health,
+            "lock_devices":   lock_devices,
+            "lock_counts":    lock_counts,
+            "smoke_devices":  smoke_devices,
+            "smoke_counts":   smoke_counts,
             "alert_count":    len(prop_alerts),
             "recent_alerts":  prop_alerts[:3],
             "primary_temp":   pt,
@@ -584,6 +756,37 @@ async def all_temperatures(request: Request, property_id: str, sensor: str = "")
     })
 
 
+@app.get("/decisions", response_class=HTMLResponse)
+async def system_decisions(request: Request,
+                           level: str = "",
+                           property_id: str = "",
+                           event_type: str = "",
+                           limit: int = 250):
+    """Dedicated page for critical system decisions/operator actions."""
+    level_filter = level.strip().lower() or None
+    property_filter = property_id.strip() or None
+    type_filter = event_type.strip().lower() or None
+    rows = db.get_system_events(
+        limit=limit,
+        level=level_filter,
+        property_id=property_filter,
+        event_type=type_filter,
+    )
+    events = _decode_system_event_rows(rows)
+
+    return templates.TemplateResponse("system_decisions.html", {
+        "request": request,
+        "config": CONFIG,
+        "events": events,
+        "filters": {
+            "level": level_filter or "",
+            "property_id": property_filter or "",
+            "event_type": type_filter or "",
+            "limit": max(1, min(int(limit), 1000)),
+        },
+    })
+
+
 @app.get("/api/status")
 async def api_status():
     """JSON snapshot of all properties — useful for external scripts / health checks."""
@@ -624,6 +827,124 @@ async def api_system_health():
     return JSONResponse(content=_collect_container_health(CONFIG))
 
 
+@app.get("/api/system/decisions")
+async def api_system_decisions(limit: int = 200,
+                               level: str = "",
+                               property_id: str = "",
+                               event_type: str = ""):
+    rows = db.get_system_events(
+        limit=limit,
+        level=level.strip().lower() or None,
+        property_id=property_id.strip() or None,
+        event_type=event_type.strip().lower() or None,
+    )
+    return JSONResponse(content=_decode_system_event_rows(rows))
+
+
+@app.post("/api/property/{property_id}/locks/all/{action}")
+async def api_lock_all(property_id: str, action: str,
+                       _auth=Depends(_require_write_auth)):
+    """Lock/unlock all locks for a property via Hubitat Maker API."""
+    cmd = str(action or "").strip().lower()
+    if cmd not in {"lock", "unlock"}:
+        return JSONResponse(status_code=400, content={"error": "Action must be 'lock' or 'unlock'"})
+
+    prop = _get_property_cfg(property_id)
+    if not prop:
+        return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+
+    client = _hubitat_client_for_property(property_id)
+    if not client:
+        return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
+
+    try:
+        locks = client.get_lock_devices()
+        result = client.command_locks(cmd, locks)
+    except Exception as exc:
+        _record_system_event(
+            event_type="lock_command_all_failed",
+            level="error",
+            property_id=property_id,
+            actor="api",
+            message=f"{cmd.title()} all locks failed",
+            details={"error": str(exc)},
+        )
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+    _record_system_event(
+        event_type="lock_command_all",
+        level="warning" if cmd == "unlock" else "info",
+        property_id=property_id,
+        actor="api",
+        message=f"{cmd.title()} all locks requested",
+        details={
+            "attempted": result.get("attempted"),
+            "succeeded": result.get("succeeded"),
+            "failed": result.get("failed"),
+        },
+    )
+    _schedule_collection_refresh()
+    return JSONResponse(content={
+        "status": "ok",
+        "property_id": property_id,
+        "action": cmd,
+        "result": result,
+    })
+
+
+@app.post("/api/property/{property_id}/locks/{device_id}/{action}")
+async def api_lock_device(property_id: str, device_id: str, action: str,
+                          _auth=Depends(_require_write_auth)):
+    """Lock/unlock one lock device for a property."""
+    cmd = str(action or "").strip().lower()
+    if cmd not in {"lock", "unlock"}:
+        return JSONResponse(status_code=400, content={"error": "Action must be 'lock' or 'unlock'"})
+
+    prop = _get_property_cfg(property_id)
+    if not prop:
+        return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+
+    client = _hubitat_client_for_property(property_id)
+    if not client:
+        return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
+
+    lock_name = device_id
+    try:
+        known_locks = client.get_lock_devices()
+        for lock in known_locks:
+            if str(lock.get("entity_id")) == str(device_id):
+                lock_name = lock.get("friendly_name") or device_id
+                break
+        result = client.command_device(device_id, cmd)
+    except Exception as exc:
+        _record_system_event(
+            event_type="lock_command_failed",
+            level="error",
+            property_id=property_id,
+            actor="api",
+            message=f"{cmd.title()} lock failed: {lock_name}",
+            details={"device_id": str(device_id), "error": str(exc)},
+        )
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+    _record_system_event(
+        event_type="lock_command",
+        level="warning" if cmd == "unlock" else "info",
+        property_id=property_id,
+        actor="api",
+        message=f"{cmd.title()} lock requested: {lock_name}",
+        details={"device_id": str(device_id), "friendly_name": lock_name},
+    )
+    _schedule_collection_refresh()
+    return JSONResponse(content={
+        "status": "ok",
+        "property_id": property_id,
+        "device_id": str(device_id),
+        "action": cmd,
+        "result": result,
+    })
+
+
 @app.post("/api/system/reboot")
 async def api_system_reboot(_auth=Depends(_require_write_auth)):
     """
@@ -646,6 +967,13 @@ async def api_system_reboot(_auth=Depends(_require_write_auth)):
             logger.exception("Container reboot command failed: %s", cmd)
 
     threading.Thread(target=_reboot_later, daemon=True).start()
+    _record_system_event(
+        event_type="system_reboot_requested",
+        level="warning",
+        actor="api",
+        message="Container reboot requested from dashboard",
+        details={"delay_seconds": delay_seconds},
+    )
     logger.warning("Container reboot requested via API, executing in %ss", delay_seconds)
     return JSONResponse(content={"status": "reboot_scheduled", "delay_seconds": delay_seconds})
 
@@ -722,8 +1050,6 @@ async def get_thresholds():
 async def update_thresholds(pid: str, request: Request,
                              _auth=Depends(_require_write_auth)):
     """Update per-property alert thresholds and persist to config.yaml."""
-    import asyncio
-
     def _as_bool(val):
         if isinstance(val, bool):
             return val
@@ -778,6 +1104,7 @@ async def update_thresholds(pid: str, request: Request,
     # If changed, trigger an immediate background collection so the
     # dashboard reflects the new sensor without waiting for the interval.
     primary_changed = False
+    old_primary = ""
     new_primary = body.get("primary_temp_sensor", "").strip()
     if new_primary:
         for coll in prop.get("collectors", []):
@@ -796,15 +1123,24 @@ async def update_thresholds(pid: str, request: Request,
 
     # Update scheduler in-memory alert state (no restart needed)
     scheduler.update_property_alert_cfg(pid, pcfg)
+    _record_system_event(
+        event_type="thresholds_updated",
+        level="info",
+        property_id=pid,
+        actor="api",
+        message="Alert thresholds updated",
+        details={"updated_keys": sorted(body.keys())},
+    )
     if primary_changed:
-        def _refresh_with_retry():
-            # A collection might already be running; retry briefly so sensor
-            # changes still refresh quickly after the lock is released.
-            for _ in range(3):
-                if scheduler.collect_all():
-                    return
-                time.sleep(5)
-        asyncio.get_running_loop().run_in_executor(None, _refresh_with_retry)
+        _schedule_collection_refresh(retries=3, wait_seconds=5)
+        _record_system_event(
+            event_type="primary_sensor_changed",
+            level="info",
+            property_id=pid,
+            actor="api",
+            message="Primary display sensor changed",
+            details={"from": old_primary, "to": new_primary},
+        )
         logger.info("[%s] primary sensor changed; immediate collection requested (with retry)", pid)
 
     logger.info("Thresholds updated for [%s]: alerts=%s primary_sensor=%s", pid, pcfg, new_primary)
@@ -841,6 +1177,17 @@ async def clear_alert(alert_id: int, _auth=Depends(_require_write_auth)):
     if not changed:
         return JSONResponse(content={"status": "already_cleared", "alert_id": alert_id})
 
+    _record_system_event(
+        event_type="water_alert_cleared",
+        level="info",
+        property_id=alert.get("property_id"),
+        actor="api",
+        message="Water alert cleared manually",
+        details={
+            "alert_id": alert_id,
+            "sensor_id": alert.get("sensor_id"),
+        },
+    )
     logger.info("Water alert cleared manually: id=%s pid=%s sensor=%s",
                 alert_id, alert.get("property_id"), alert.get("sensor_id"))
     return JSONResponse(content={"status": "cleared", "alert_id": alert_id})
@@ -866,6 +1213,14 @@ async def clear_alerts_by_category(pid: str, category: str, _auth=Depends(_requi
 
     alert_type = None if category == "all" else category
     changed = db.resolve_alerts(property_id=pid, alert_type=alert_type)
+    _record_system_event(
+        event_type="alerts_cleared_by_category",
+        level="info",
+        property_id=pid,
+        actor="api",
+        message="Alerts cleared manually by category",
+        details={"category": category, "cleared": changed},
+    )
     logger.info("Alerts cleared manually: pid=%s category=%s count=%s", pid, category, changed)
     return JSONResponse(content={
         "status": "cleared",
@@ -878,9 +1233,13 @@ async def clear_alerts_by_category(pid: str, category: str, _auth=Depends(_requi
 @app.post("/api/collect/now")
 async def trigger_collection(_auth=Depends(_require_write_auth)):
     """Manually trigger an immediate collection run (useful for testing)."""
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, scheduler.collect_all)
+    threading.Thread(target=scheduler.collect_all, daemon=True).start()
+    _record_system_event(
+        event_type="manual_collection_triggered",
+        level="info",
+        actor="api",
+        message="Manual collection run requested",
+    )
     return JSONResponse(content={"status": "triggered"})
 
 
