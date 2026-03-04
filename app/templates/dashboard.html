@@ -514,7 +514,7 @@
                 {% if chg > 50 %}
                   <p class="property-energy-value text-green-400">⬆ {{ fmt_power(chg) }}</p>
                 {% elif chg < -50 %}
-                  <p class="property-energy-value text-yellow-300">⬇ {{ fmt_power(chg|abs) }}</p>
+                  <p class="property-energy-value text-red-400">⬇ {{ fmt_power(chg|abs) }}</p>
                 {% else %}
                   <p class="property-energy-value text-gray-300">≈ 0 W</p>
                 {% endif %}
