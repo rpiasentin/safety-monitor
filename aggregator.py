@@ -194,23 +194,29 @@ def _rollup(sources: dict) -> dict:
 
     # Tesla Energy (Powerwall/solar) fallback — fills canonical fields when
     # no EG4/Victron present, so HC shows the same gauges as FM.
+    #
+    # Important: do not gate this on solar_power only. Some Tesla entities can
+    # be temporarily unavailable while SOC/grid/load are still valid, and we
+    # still want the HC dashboard energy section to render.
     tesla = out["tesla"] or {}
-    if isinstance(tesla, dict) and tesla.get("solar_power_kw") is not None:
+    if isinstance(tesla, dict) and tesla:
         def _kw_to_w(kw):
             return round(kw * 1000, 1) if kw is not None else None
 
-        if out["soc"] is None:
+        if out["soc"] is None and tesla.get("soc_percent") is not None:
             out["soc"] = tesla.get("soc_percent")
-        if out["pv_total_power"] is None:
+        if out["pv_total_power"] is None and tesla.get("solar_power_kw") is not None:
             out["pv_total_power"] = _kw_to_w(tesla.get("solar_power_kw"))
-        if out["load_power"] is None:
+        if out["load_power"] is None and tesla.get("load_power_kw") is not None:
             w = _kw_to_w(tesla.get("load_power_kw"))
             out["load_power"]    = w
             out["power_to_user"] = w
-        if out["battery_charging_power"] is None:
+        if out["battery_charging_power"] is None and tesla.get("battery_power_kw") is not None:
             out["battery_charging_power"] = _kw_to_w(tesla.get("battery_power_kw"))
         # Grid power — Powerwall-only field (negative = exporting, positive = importing)
-        out["grid_power"]  = _kw_to_w(tesla.get("site_power_kw"))
-        out["grid_online"] = tesla.get("grid_online")
+        if tesla.get("site_power_kw") is not None:
+            out["grid_power"] = _kw_to_w(tesla.get("site_power_kw"))
+        if tesla.get("grid_online") is not None:
+            out["grid_online"] = tesla.get("grid_online")
 
     return out
