@@ -50,8 +50,30 @@ ssh -i "$CT104_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=12 
    systemctl is-active safety-monitor
    echo "HEAD=$(git rev-parse --short HEAD)"
    echo "CONFIG_OWNER=$(stat -c "%U:%G" config.yaml)"
-   curl -fsS http://127.0.0.1:8000/api/status | python3 -m json.tool >/dev/null
+   api_ready=0
+   for i in $(seq 1 20); do
+     if curl -fsS http://127.0.0.1:8000/api/status 2>/dev/null | python3 -m json.tool >/dev/null 2>&1; then
+       api_ready=1
+       break
+     fi
+     sleep 2
+   done
+   if [[ "$api_ready" != "1" ]]; then
+     echo "ERROR: API did not become ready at http://127.0.0.1:8000/api/status" >&2
+     systemctl status safety-monitor --no-pager -l | tail -n 60 >&2 || true
+     exit 1
+   fi
    echo "API_STATUS=ok"
    curl -fsS http://127.0.0.1:8000/api/system/health | python3 -m json.tool | head -n 20
-   echo "UI_SMOKE:"
-   curl -fsS http://127.0.0.1:8000/ | grep -n "All temperatures\|Container Health\|Reboot Container"'
+   ui_ready=0
+   for i in $(seq 1 15); do
+     if curl -fsS http://127.0.0.1:8000/ | grep -n "All temperatures\|Container Health\|Reboot Container"; then
+       ui_ready=1
+       break
+     fi
+     sleep 2
+   done
+   if [[ "$ui_ready" != "1" ]]; then
+     echo "ERROR: UI smoke strings missing after retries" >&2
+     exit 1
+   fi'
