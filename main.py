@@ -15,6 +15,7 @@ import json
 import csv
 import io
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -876,6 +877,14 @@ async def dashboard(request: Request):
                                             global_temp_cfg.get("threshold_fahrenheit", 40)),
                 "indoor_temp_critical": pcfg.get("indoor_temp_critical",
                                             global_temp_cfg.get("critical_fahrenheit", 32)),
+                "temperature_cooldown_minutes": pcfg.get(
+                    "temperature_cooldown_minutes",
+                    global_temp_cfg.get("cooldown_minutes", 60),
+                ),
+                "temperature_pushover_enabled": pcfg.get(
+                    "temperature_pushover_enabled",
+                    global_temp_cfg.get("pushover_enabled", True),
+                ),
                 "temp_graph_hours":    pcfg.get("temp_graph_hours",
                                             global_temp_cfg.get("graph_hours", 24)),
                 "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
@@ -922,6 +931,22 @@ async def dashboard(request: Request):
                 "water_exclude_sensors": pcfg.get(
                     "water_exclude_sensors",
                     global_water_cfg.get("exclude_sensors", []),
+                ),
+                "smoke_sustain_minutes": pcfg.get(
+                    "smoke_sustain_minutes",
+                    global_smoke_cfg.get("sustain_minutes", 3),
+                ),
+                "smoke_cooldown_minutes": pcfg.get(
+                    "smoke_cooldown_minutes",
+                    global_smoke_cfg.get("cooldown_minutes", 60),
+                ),
+                "smoke_mute_default_minutes": pcfg.get(
+                    "smoke_mute_default_minutes",
+                    global_smoke_cfg.get("mute_default_minutes", 60),
+                ),
+                "smoke_pushover_enabled": pcfg.get(
+                    "smoke_pushover_enabled",
+                    global_smoke_cfg.get("pushover_enabled", True),
                 ),
                 "suppress_maker_device_alerts": pcfg.get(
                     "suppress_maker_device_alerts",
@@ -1513,6 +1538,7 @@ async def get_thresholds():
     global_battery = global_alerts.get("battery", {})
     global_offline = global_alerts.get("offline", {})
     global_water = global_alerts.get("water", {})
+    global_smoke = global_alerts.get("smoke", {})
     result = {}
     for p in CONFIG.get("properties", []):
         pid  = p["id"]
@@ -1523,6 +1549,14 @@ async def get_thresholds():
                                          global_temp.get("threshold_fahrenheit", 40)),
             "indoor_temp_critical":  pcfg.get("indoor_temp_critical",
                                          global_temp.get("critical_fahrenheit", 32)),
+            "temperature_cooldown_minutes": pcfg.get(
+                "temperature_cooldown_minutes",
+                global_temp.get("cooldown_minutes", 60),
+            ),
+            "temperature_pushover_enabled": pcfg.get(
+                "temperature_pushover_enabled",
+                global_temp.get("pushover_enabled", True),
+            ),
             "temp_graph_hours":      pcfg.get("temp_graph_hours",
                                          global_temp.get("graph_hours", 24)),
             "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
@@ -1569,6 +1603,22 @@ async def get_thresholds():
                 "water_exclude_sensors",
                 global_water.get("exclude_sensors", []),
             ),
+            "smoke_sustain_minutes": pcfg.get(
+                "smoke_sustain_minutes",
+                global_smoke.get("sustain_minutes", 3),
+            ),
+            "smoke_cooldown_minutes": pcfg.get(
+                "smoke_cooldown_minutes",
+                global_smoke.get("cooldown_minutes", 60),
+            ),
+            "smoke_mute_default_minutes": pcfg.get(
+                "smoke_mute_default_minutes",
+                global_smoke.get("mute_default_minutes", 60),
+            ),
+            "smoke_pushover_enabled": pcfg.get(
+                "smoke_pushover_enabled",
+                global_smoke.get("pushover_enabled", True),
+            ),
             "suppress_maker_device_alerts": pcfg.get(
                 "suppress_maker_device_alerts",
                 False,
@@ -1594,6 +1644,15 @@ async def update_thresholds(pid: str, request: Request,
             return val.strip().lower() in {"1", "true", "yes", "on"}
         return False
 
+    def _as_finite_float(val):
+        try:
+            num = float(val)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(num):
+            return None
+        return num
+
     # Find the property
     props = CONFIG.get("properties", [])
     prop  = next((p for p in props if p["id"] == pid), None)
@@ -1607,17 +1666,38 @@ async def update_thresholds(pid: str, request: Request,
     pcfg = prop["alerts"]
 
     # Numeric thresholds
+    minute_keys = {
+        "temperature_cooldown_minutes",
+        "battery_cooldown_minutes",
+        "offline_timeout_minutes",
+        "offline_cooldown_minutes",
+        "smoke_sustain_minutes",
+        "smoke_cooldown_minutes",
+        "smoke_mute_default_minutes",
+    }
     for key in ("indoor_temp_warning", "indoor_temp_critical",
+                "temperature_cooldown_minutes",
                 "outdoor_temp_warning", "outdoor_temp_critical",
                 "battery_low_threshold_percent",
                 "battery_critical_threshold_percent",
                 "battery_cooldown_minutes",
                 "offline_timeout_minutes",
-                "offline_cooldown_minutes"):
+                "offline_cooldown_minutes",
+                "smoke_sustain_minutes",
+                "smoke_cooldown_minutes",
+                "smoke_mute_default_minutes"):
         if key in body and body[key] is not None:
-            pcfg[key] = float(body[key])
+            parsed = _as_finite_float(body[key])
+            if parsed is None:
+                continue
+            if key in minute_keys:
+                pcfg[key] = max(1, int(parsed))
+            else:
+                pcfg[key] = parsed
     if "temp_graph_hours" in body and body["temp_graph_hours"] is not None:
-        pcfg["temp_graph_hours"] = max(1, int(float(body["temp_graph_hours"])))
+        parsed = _as_finite_float(body["temp_graph_hours"])
+        if parsed is not None:
+            pcfg["temp_graph_hours"] = max(1, int(parsed))
 
     # Sensor lists (accept comma-separated string or list)
     for key in ("outdoor_sensors", "exclude_sensors",
@@ -1627,12 +1707,27 @@ async def update_thresholds(pid: str, request: Request,
             val = body[key]
             if isinstance(val, str):
                 val = [s.strip() for s in val.split(",") if s.strip()]
-            pcfg[key] = val
+            if not isinstance(val, list):
+                val = []
+            cleaned = []
+            seen = set()
+            for item in val:
+                token = str(item).strip()
+                if not token:
+                    continue
+                key_norm = token.lower()
+                if key_norm in seen:
+                    continue
+                seen.add(key_norm)
+                cleaned.append(token)
+            pcfg[key] = cleaned
 
     # Per-alert push toggles
     for key in ("battery_pushover_enabled",
                 "offline_pushover_enabled",
                 "water_pushover_enabled",
+                "temperature_pushover_enabled",
+                "smoke_pushover_enabled",
                 "suppress_maker_device_alerts"):
         if key in body and body[key] is not None:
             pcfg[key] = _as_bool(body[key])

@@ -119,7 +119,7 @@
         </div>
         <div class="px-5 py-3 border-b border-gray-800 text-xs text-gray-400">
           This panel controls the live rules used by dashboard badges and Pushover alerts:
-          temperature, battery, offline, and water leak handling.
+          temperature, battery, offline, water leak, and smoke/CO handling.
         </div>
         <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
           {% for card in cards %}
@@ -226,6 +226,22 @@
                   id="{{ card.id }}_outdoor_temp_critical"
                   value="{{ card.alerts_cfg.outdoor_temp_critical|int }}"
                   class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+              </label>
+            </div>
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <label class="block">
+                <span class="text-xs text-gray-500 block mb-1">Temp Cooldown (min)</span>
+                <input type="number" step="1"
+                  id="{{ card.id }}_temperature_cooldown_minutes"
+                  value="{{ card.alerts_cfg.temperature_cooldown_minutes|int }}"
+                  class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+              </label>
+              <label class="flex items-end pb-1 gap-2">
+                <input type="checkbox"
+                  id="{{ card.id }}_temperature_pushover_enabled"
+                  {% if card.alerts_cfg.temperature_pushover_enabled %}checked{% endif %}
+                  class="accent-blue-500">
+                <span class="text-xs text-gray-400">Temp Pushover</span>
               </label>
             </div>
             <div class="mb-3">
@@ -346,7 +362,41 @@
                     <input type="text"
                       id="{{ card.id }}_water_exclude_sensors"
                       value="{{ card.alerts_cfg.water_exclude_sensors|join(', ') }}"
+                    class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                </div>
+              </div>
+
+              <div class="pt-3 border-t border-gray-700">
+                <p class="text-xs text-gray-400 mb-2">🚨 Smoke / CO Alerts</p>
+                <div class="grid grid-cols-2 gap-3">
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Sustain (min)</span>
+                    <input type="number" step="1"
+                      id="{{ card.id }}_smoke_sustain_minutes"
+                      value="{{ card.alerts_cfg.smoke_sustain_minutes|int }}"
                       class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Cooldown (min)</span>
+                    <input type="number" step="1"
+                      id="{{ card.id }}_smoke_cooldown_minutes"
+                      value="{{ card.alerts_cfg.smoke_cooldown_minutes|int }}"
+                      class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                  <label class="block">
+                    <span class="text-xs text-gray-500 block mb-1">Default Mute (min)</span>
+                    <input type="number" step="1"
+                      id="{{ card.id }}_smoke_mute_default_minutes"
+                      value="{{ card.alerts_cfg.smoke_mute_default_minutes|int }}"
+                      class="w-full bg-gray-700 border border-gray-600 text-white text-sm rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500">
+                  </label>
+                  <label class="flex items-end pb-1 gap-2">
+                    <input type="checkbox"
+                      id="{{ card.id }}_smoke_pushover_enabled"
+                      {% if card.alerts_cfg.smoke_pushover_enabled %}checked{% endif %}
+                      class="accent-blue-500">
+                    <span class="text-xs text-gray-400">Send Pushover</span>
                   </label>
                 </div>
               </div>
@@ -1391,6 +1441,8 @@
       const payload = {
         indoor_temp_warning:   parseFloat(g('indoor_temp_warning')),
         indoor_temp_critical:  parseFloat(g('indoor_temp_critical')),
+        temperature_cooldown_minutes: parseFloat(g('temperature_cooldown_minutes')),
+        temperature_pushover_enabled: cb('temperature_pushover_enabled'),
         temp_graph_hours:      parseFloat(g('temp_graph_hours')),
         outdoor_temp_warning:  parseFloat(g('outdoor_temp_warning')),
         outdoor_temp_critical: parseFloat(g('outdoor_temp_critical')),
@@ -1407,6 +1459,10 @@
         offline_pushover_enabled:           cb('offline_pushover_enabled'),
         water_pushover_enabled:             cb('water_pushover_enabled'),
         water_exclude_sensors:              csv('water_exclude_sensors'),
+        smoke_sustain_minutes:              parseFloat(g('smoke_sustain_minutes')),
+        smoke_cooldown_minutes:             parseFloat(g('smoke_cooldown_minutes')),
+        smoke_mute_default_minutes:         parseFloat(g('smoke_mute_default_minutes')),
+        smoke_pushover_enabled:             cb('smoke_pushover_enabled'),
         suppress_maker_device_alerts:       cb('suppress_maker_device_alerts'),
         suppress_maker_devices:             suppressMakerDevices,
       };

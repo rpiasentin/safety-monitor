@@ -201,8 +201,11 @@ class AlertProcessor:
     def _check_temps(self, pid: str, snapshot: dict, property_cfg: dict,
                      suppress_maker_devices: bool = False) -> list[dict]:
         cfg = self.cfg.get("temperature", {})
-        cooldown = cfg.get("cooldown_minutes", 60)
-        use_push = cfg.get("pushover_enabled", True)
+        cooldown = int(property_cfg.get("temperature_cooldown_minutes",
+                                        cfg.get("cooldown_minutes", 60)))
+        use_push = property_cfg.get("temperature_pushover_enabled",
+                                    cfg.get("pushover_enabled", True))
+        cooldown = max(1, cooldown)
 
         # Per-property overrides, fall back to global
         indoor_warn = property_cfg.get("indoor_temp_warning",
