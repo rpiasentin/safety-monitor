@@ -19,6 +19,8 @@ cd "$ROOT_DIR"
 
 SM_CT104_HOST="${SM_CT104_HOST:-192.168.2.105}"
 SM_CT104_USER="${SM_CT104_USER:-root}"
+SM_CONTROLLED_PASS="${SM_CONTROLLED_PASS:-0}"
+SM_CT104_FIX_OWNERSHIP="${SM_CT104_FIX_OWNERSHIP:-0}"
 
 _default_key_1="/Users/rpias/dev/vscode-dev-env/.notes_access/ssh/ct104_root_ed25519"
 _default_key_2="$HOME/dev/vscode-dev-env/.notes_access/ssh/ct104_root_ed25519"
@@ -151,6 +153,7 @@ if [[ -f "$CT104_KEY" ]]; then
        cd /opt/safety-monitor/app
        echo "remote_head=$(git rev-parse --short HEAD)"
        echo "service=$(systemctl is-active safety-monitor)"
+       echo "config_owner=$(stat -c "%U:%G" config.yaml 2>/dev/null || stat -f "%Su:%Sg" config.yaml)"
        curl -fsS http://127.0.0.1:8000/api/status >/dev/null
        echo "api_status=ok"'
   )" || true
@@ -158,8 +161,38 @@ if [[ -f "$CT104_KEY" ]]; then
   if [[ "$REMOTE_CHECK_OUTPUT" == *"remote_head="* ]]; then
     pass "CT104 app repo reachable"
     printf '%s\n' "$REMOTE_CHECK_OUTPUT"
+    if [[ "$REMOTE_CHECK_OUTPUT" == *"config_owner=safetymon:safetymon"* ]]; then
+      pass "CT104 config.yaml ownership is safetymon:safetymon"
+    else
+      fail "CT104 config.yaml ownership drift detected (expected safetymon:safetymon)"
+      if [[ "$SM_CT104_FIX_OWNERSHIP" == "1" ]]; then
+        if run_with_timeout 20 ssh -i "$CT104_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 \
+            "${SM_CT104_USER}@${SM_CT104_HOST}" \
+            'set -euo pipefail
+             chown safetymon:safetymon /opt/safety-monitor/app/config.yaml
+             stat -c "%U:%G" /opt/safety-monitor/app/config.yaml 2>/dev/null || stat -f "%Su:%Sg" /opt/safety-monitor/app/config.yaml' >/dev/null 2>&1; then
+          pass "CT104 config.yaml ownership auto-fixed to safetymon:safetymon"
+        else
+          fail "CT104 config.yaml ownership auto-fix failed"
+        fi
+      fi
+    fi
   else
     fail "CT104 app repo/runtime check failed"
+  fi
+fi
+
+if [[ "$SM_CONTROLLED_PASS" == "1" ]]; then
+  section "Controlled Rules Pass"
+  if [[ ! -f "$CT104_KEY" ]]; then
+    fail "cannot run controlled rules pass: CT104 SSH key missing"
+  elif run_with_timeout 90 ssh -i "$CT104_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=8 \
+      "${SM_CT104_USER}@${SM_CT104_HOST}" \
+      'set -euo pipefail; cd /opt/safety-monitor/app; python3 -' \
+      < "$ROOT_DIR/tools/notification_rules_matrix.py"; then
+    pass "notification rules regression matrix passed on CT104"
+  else
+    fail "notification rules regression matrix failed"
   fi
 fi
 
@@ -178,6 +211,9 @@ Recommended fixes:
    ssh -i /Users/rpias/dev/vscode-dev-env/.notes_access/ssh/ct104_root_ed25519 -o IdentitiesOnly=yes root@192.168.2.105
 3) Verify repo remote:
    git remote set-url origin https://github.com/rpiasentin/safety-monitor.git
+4) Normalize runtime config ownership:
+   ssh -i /Users/rpias/dev/vscode-dev-env/.notes_access/ssh/ct104_root_ed25519 -o IdentitiesOnly=yes root@192.168.2.105 \
+     'chown safetymon:safetymon /opt/safety-monitor/app/config.yaml'
 TXT
   exit 1
 fi

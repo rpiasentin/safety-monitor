@@ -131,6 +131,10 @@ Operational details:
 ```bash
 # From Proxmox host (pve-forget):
 pct exec 104 -- bash -c 'cd /opt/safety-monitor/app && git pull && systemctl restart safety-monitor'
+
+# Then run from local workspace (normalizes config.yaml ownership + smoke checks):
+cd /Users/rpias/dev/safety-monitor
+make post-deploy-guard
 ```
 
 ## Cowork session preflight (zero-friction)
@@ -147,6 +151,20 @@ What it verifies:
 2. GitHub access (`git ls-remote`, `gh auth status` if `gh` is installed)
 3. CT104 SSH access with key auth
 4. CT104 runtime health (`safety-monitor` service + `/api/status`)
+5. CT104 `config.yaml` ownership is `safetymon:safetymon` (or auto-fix when enabled)
+
+## Controlled pass (notification rules + access)
+
+Run this before deploys when notification behavior has changed:
+
+```bash
+cd /Users/rpias/dev/safety-monitor
+make controlled-pass
+```
+
+What it adds on top of normal preflight:
+1. Deterministic notification rules matrix (temperature, battery, water, smoke, offline, maker suppression)
+2. Optional CT104 ownership auto-fix for `/opt/safety-monitor/app/config.yaml`
 
 ### One-time Codex approvals (for new agents/threads)
 

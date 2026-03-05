@@ -1,8 +1,21 @@
 # Safety Monitor Backlog Status
 
-Last updated: 2026-03-04 (night pass)
+Last updated: 2026-03-05 (controlled hardening pass)
 
 ## Delivered In This Pass
+
+0. Notification/deploy hardening
+- Added deterministic alert-rule regression matrix script:
+  - `tools/notification_rules_matrix.py`
+  - Covers push toggles for temperature, battery, water, smoke, offline
+  - Covers maker-device suppression (global + per-device)
+- Added controlled preflight mode:
+  - `make controlled-pass` (sets `SM_CONTROLLED_PASS=1` + ownership auto-fix)
+- Added CT104 post-deploy ownership/runtime guard:
+  - `tools/ct104_post_deploy_guard.sh`
+  - `make post-deploy-guard`
+- Preflight now validates CT104 `config.yaml` ownership and can auto-fix to:
+  - `safetymon:safetymon`
 
 1. Hubitat device lifecycle hardening
 - Added auto-pruning for `hubitat_devices` records when devices disappear from Hubitat.
