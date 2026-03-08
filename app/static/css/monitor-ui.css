@@ -13,6 +13,7 @@
   --radius-lg: 20px;
   --radius-md: 14px;
   --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.28);
+  --dashboard-sticky-offset: 168px;
 }
 
 * {
@@ -80,18 +81,148 @@
 #summary-section,
 #alerts-section,
 #alerts-wrapper,
+#container-health-section,
 [id^="prop-"] {
-  scroll-margin-top: 92px;
+  scroll-margin-top: var(--dashboard-sticky-offset);
 }
 
 .dashboard-page .monitor-main {
-  padding-top: 0.9rem !important;
+  padding-top: 0.72rem !important;
   padding-bottom: 1.15rem !important;
 }
 
 .dashboard-page .monitor-header {
-  padding-top: 0.62rem !important;
-  padding-bottom: 0.62rem !important;
+  padding-top: 0.44rem !important;
+  padding-bottom: 0.52rem !important;
+}
+
+.monitor-dashboard-header {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.header-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.header-title {
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header-status-row,
+.header-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 0.04rem;
+}
+
+.header-status-row::-webkit-scrollbar,
+.header-nav-row::-webkit-scrollbar {
+  display: none;
+}
+
+.monitor-status-chip {
+  padding: 0.22rem 0.56rem;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  background: rgba(13, 27, 43, 0.68);
+  white-space: nowrap;
+}
+
+.monitor-header #clock {
+  padding: 0.22rem 0.56rem !important;
+  font-size: 0.7rem;
+  min-width: auto;
+  text-align: center;
+}
+
+.header-nav-btn {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0.24rem 0.62rem !important;
+  font-size: 0.71rem !important;
+  white-space: nowrap;
+  border-radius: 10px;
+}
+
+.header-alert-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  border: 1px solid var(--line-strong);
+  padding: 0.24rem 0.62rem;
+  min-height: 30px;
+  white-space: nowrap;
+}
+
+.header-alert-link:hover {
+  color: #ffffff;
+}
+
+.header-property-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.34rem;
+}
+
+.header-property-link {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.26rem;
+  text-decoration: none;
+  border-radius: 11px;
+  border: 1px solid rgba(130, 170, 208, 0.28);
+  background: rgba(17, 34, 52, 0.72);
+  color: #deeeff;
+  padding: 0.34rem 0.28rem;
+  min-height: 32px;
+  font-size: 0.66rem;
+  font-weight: 600;
+}
+
+.header-property-link:hover {
+  border-color: rgba(94, 201, 202, 0.8);
+  color: #ffffff;
+}
+
+.header-property-link.is-alert {
+  border-color: rgba(251, 120, 129, 0.58);
+  color: #ffd4d8;
+}
+
+.header-property-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.header-property-badge {
+  min-width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(215, 66, 66, 0.92);
+  color: #fff5f5;
+  font-size: 0.62rem;
+  font-weight: 700;
 }
 
 .monitor-hero {
@@ -202,18 +333,6 @@
 .monitor-clock {
   font-family: "JetBrains Mono", "SFMono-Regular", Menlo, monospace;
   letter-spacing: 0.02em;
-}
-
-.header-actions-wrap {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.header-quick-nav {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 0.34rem;
-  justify-content: flex-end;
 }
 
 .monitor-mini-button {
@@ -900,6 +1019,10 @@
 }
 
 @media (max-width: 860px) {
+  :root {
+    --dashboard-sticky-offset: 184px;
+  }
+
   .dashboard-page .monitor-main {
     padding-bottom: calc(1.5rem + env(safe-area-inset-bottom, 0px)) !important;
   }
@@ -928,16 +1051,9 @@
   }
 
   .monitor-header {
-    gap: 0.65rem !important;
-    padding-top: 0.45rem !important;
-    padding-bottom: 0.45rem !important;
-  }
-
-  .monitor-header > .header-actions-wrap {
-    width: 100%;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 0.35rem;
+    gap: 0.38rem !important;
+    padding-top: 0.4rem !important;
+    padding-bottom: 0.44rem !important;
   }
 
   .monitor-nav-link,
@@ -958,22 +1074,30 @@
     margin-left: 0;
   }
 
-  .monitor-header .monitor-mini-button {
-    min-height: 30px !important;
-    padding: 0.25rem 0.52rem !important;
-    font-size: 0.7rem !important;
-    border-radius: 10px;
+  .header-title {
+    font-size: 0.9rem;
   }
 
-  .monitor-header #header-alert-chip,
+  .header-nav-btn,
+  .header-alert-link {
+    min-height: 28px !important;
+    padding: 0.22rem 0.52rem !important;
+    font-size: 0.68rem !important;
+  }
+
+  .monitor-status-chip,
   .monitor-header #clock {
-    padding-top: 0.24rem !important;
-    padding-bottom: 0.24rem !important;
+    font-size: 0.64rem !important;
   }
 
-  .monitor-header .text-xl,
-  .monitor-header .text-lg {
-    font-size: 1.02rem !important;
+  .header-property-row {
+    gap: 0.28rem;
+  }
+
+  .header-property-link {
+    min-height: 30px;
+    padding: 0.3rem 0.22rem;
+    font-size: 0.62rem;
   }
 
   .property-grid {
@@ -1107,15 +1231,8 @@
 }
 
 @media (max-width: 640px) {
-  .monitor-nav-link {
-    font-size: 0.72rem;
-    padding-left: 0.6rem;
-    padding-right: 0.6rem;
-  }
-
-  .monitor-header #clock {
-    min-width: 110px;
-    text-align: center;
+  :root {
+    --dashboard-sticky-offset: 192px;
   }
 
   .metric-grid {
@@ -1135,9 +1252,19 @@
     font-size: 0.9rem;
   }
 
-  .quick-jump-link {
-    font-size: 0.74rem;
-    padding: 0.44rem 0.78rem;
+  .header-title {
+    font-size: 0.84rem;
+  }
+
+  .header-property-link {
+    font-size: 0.58rem;
+    letter-spacing: 0.01em;
+  }
+
+  .header-property-badge {
+    min-width: 0.92rem;
+    height: 0.92rem;
+    font-size: 0.56rem;
   }
 
   .feed-health-label {
