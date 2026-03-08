@@ -13,6 +13,15 @@ def _norm(value) -> str:
     return str(value or "").strip().lower()
 
 
+def valve_is_excluded(property_cfg: dict | None, valve_id: str | None) -> bool:
+    cfg = property_cfg or {}
+    did = str(valve_id or "").strip()
+    if not did:
+        return False
+    excluded = cfg.get("water_valve_exclude_ids") or []
+    return did in {str(item or "").strip() for item in excluded if str(item or "").strip()}
+
+
 def valve_service_on_raw_state(property_cfg: dict | None, valve_id: str | None = None) -> str:
     """Return which raw valve state means `Water On` for this valve."""
     cfg = property_cfg or {}

@@ -479,6 +479,49 @@ def case_water_shutoff_inverted_water_off_alerts():
         harness.restore()
 
 
+def case_water_shutoff_excluded_device_clears():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "39",
+            "friendly_name": "Main water cutoff",
+            "state": "open",
+        }]
+        harness.db.active_alert[("fm", "water_shutoff", "39")] = 77
+        harness.db.valve_state["fm"] = {
+            "39": {
+                "friendly_name": "Main water cutoff",
+                "last_state": "open",
+                "last_closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "acked_until_open": 0,
+                "expected_closed": 0,
+                "trigger_sensor_id": None,
+                "trigger_sensor_name": None,
+            }
+        }
+        fired = proc.process(snap, {
+            "water_valve_exclude_ids": ["39"],
+        })
+        assert len(fired) == 0
+        assert ("fm", "water_shutoff", "39") not in harness.db.active_alert
+        assert any(
+            str(ev.get("event_type") or "") == "water_incident_resolved"
+            and "excluded_device" in str(ev.get("details_json") or "")
+            for ev in harness.db.system_events
+        )
+    finally:
+        harness.restore()
+
+
 def case_water_shutoff_ack_suppresses_realert():
     harness = AlertHarness()
     harness.patch()
@@ -751,6 +794,7 @@ CASES = [
     ("water shutoff push toggle honored", case_water_shutoff_push_toggle),
     ("water shutoff inverted valve water-on suppressed", case_water_shutoff_inverted_water_on_suppressed),
     ("water shutoff inverted valve water-off alerts", case_water_shutoff_inverted_water_off_alerts),
+    ("water shutoff excluded device clears", case_water_shutoff_excluded_device_clears),
     ("water shutoff ack suppresses re-alert", case_water_shutoff_ack_suppresses_realert),
     ("water shutoff expected close suppressed", case_water_shutoff_expected_close_suppressed),
     ("water shutoff reopen resolves", case_water_shutoff_reopen_resolves),

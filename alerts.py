@@ -494,11 +494,42 @@ class AlertProcessor:
                 continue
 
             name = str(valve.get("friendly_name") or valve_id).strip()
+            state = str(valve.get("state") or "unknown").strip().lower()
+            if water_service.valve_is_excluded(property_cfg, valve_id):
+                resolved = db.resolve_alerts_for_sensor(pid, "water_shutoff", valve_id)
+                if resolved:
+                    db.insert_system_event(
+                        event_type="water_incident_resolved",
+                        level="info",
+                        property_id=pid,
+                        actor="alert",
+                        message=f"Water incident resolved: {name} removed from Safety Monitor control path",
+                        details={
+                            "device_id": valve_id,
+                            "valve_id": valve_id,
+                            "friendly_name": name,
+                            "raw_state": state,
+                            "resolved_alerts": int(resolved),
+                            "resolution": "excluded_device",
+                        },
+                    )
+                db.upsert_shutoff_valve_state(
+                    property_id=pid,
+                    valve_id=valve_id,
+                    friendly_name=name,
+                    last_state=state or "unknown",
+                    last_closed_at=None,
+                    acked_until_open=False,
+                    expected_closed=False,
+                    trigger_sensor_id=None,
+                    trigger_sensor_name=None,
+                )
+                continue
+
             if self._is_maker_device(valve_id, name, maker_ctx):
                 if suppress_maker_devices or self._is_suppressed_maker(valve_id, name, suppressed_maker):
                     continue
 
-            state = str(valve.get("state") or "unknown").strip().lower()
             service_meta = water_service.valve_service_state(state, property_cfg, valve_id)
             service_state = service_meta.get("service_state")
             row = state_map.get(valve_id) or {}

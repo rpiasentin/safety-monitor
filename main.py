@@ -495,6 +495,21 @@ def _property_alert_cfg(property_id: str) -> dict:
     return prop.get("alerts", {}) or {}
 
 
+def _is_excluded_valve(property_cfg: dict | None, valve_id: str) -> bool:
+    return water_service.valve_is_excluded(property_cfg, valve_id)
+
+
+def _filter_valve_devices_for_property(valve_devices: list[dict],
+                                       property_cfg: dict | None) -> list[dict]:
+    out = []
+    for valve in (valve_devices or []):
+        did = str(valve.get("entity_id") or "").strip()
+        if did and _is_excluded_valve(property_cfg, did):
+            continue
+        out.append(valve)
+    return out
+
+
 def _valve_service_meta(property_cfg: dict | None,
                         valve_id: str,
                         raw_state: str | None) -> dict:
@@ -1368,8 +1383,12 @@ async def dashboard(request: Request):
         lock_devices, lock_counts = _decorate_lock_devices(
             list(hub_payload.get("lock_devices") or [])
         )
-        valve_devices, valve_counts = _decorate_valve_devices(
+        visible_valves = _filter_valve_devices_for_property(
             list(hub_payload.get("valve_devices") or []),
+            pcfg,
+        )
+        valve_devices, valve_counts = _decorate_valve_devices(
+            visible_valves,
             property_cfg=pcfg,
             collected_at=hub_collected_at,
             recent_event_map=valve_event_map.get(pid) or {},
@@ -1426,6 +1445,7 @@ async def dashboard(request: Request):
             "smoke_counts":   smoke_counts,
             "water_devices":  water_devices,
             "water_counts":   water_counts,
+            "water_cutoff_notice": str(pcfg.get("water_cutoff_notice") or "").strip(),
             "smoke_sustain_minutes": int(pcfg.get("smoke_sustain_minutes",
                                       global_smoke_cfg.get("sustain_minutes", 3))),
             "smoke_mute_default_minutes": int(pcfg.get("smoke_mute_default_minutes",
@@ -2083,7 +2103,7 @@ async def api_valve_all(property_id: str, action: str,
         return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
 
     try:
-        valves = client.get_valve_devices()
+        valves = _filter_valve_devices_for_property(client.get_valve_devices(), property_cfg)
         if cmd in {"on", "off"}:
             results = []
             attempted = 0
@@ -2240,10 +2260,15 @@ async def api_valve_device(property_id: str, device_id: str, action: str,
     client = _hubitat_client_for_property(property_id)
     if not client:
         return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
+    if _is_excluded_valve(property_cfg, str(device_id)):
+        return JSONResponse(
+            status_code=409,
+            content={"error": "Water cutoff control is disabled for this device until the correct actuator is exposed"},
+        )
 
     valve_name = device_id
     try:
-        known_valves = client.get_valve_devices()
+        known_valves = _filter_valve_devices_for_property(client.get_valve_devices(), property_cfg)
         for valve in known_valves:
             if str(valve.get("entity_id")) == str(device_id):
                 valve_name = valve.get("friendly_name") or device_id

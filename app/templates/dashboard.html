@@ -841,6 +841,18 @@
             </div>
             {% endif %}
 
+            {% if card.water_cutoff_notice and not card.valve_devices %}
+            <div class="property-safety-panel">
+              <div class="property-safety-head">
+                <span class="property-safety-title">Water Cutoff</span>
+                <span class="property-safety-meta">control unavailable</span>
+              </div>
+              <div class="property-safety-note">
+                {{ card.water_cutoff_notice }}
+              </div>
+            </div>
+            {% endif %}
+
             {% if card.valve_devices %}
             <div class="property-safety-panel">
               <div class="property-safety-head">
