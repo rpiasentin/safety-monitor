@@ -14,10 +14,18 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+Install local browser automation tooling as well:
+
+```bash
+brew install node
+npm install -g @playwright/cli@latest
+playwright-cli --help
+```
+
 Notes:
 - `.python-version` is pinned to `3.11` for local tooling.
 - Future agents should prefer `.venv/bin/python` or activate `.venv` before running local checks.
-- `make preflight` now verifies the repo virtualenv exists, the interpreter is Python 3.11+, and core imports (`fastapi`, `jinja2`, `requests`, `yaml`) succeed before continuing.
+- `make preflight` now verifies the repo virtualenv exists, the interpreter is Python 3.11+, core imports (`fastapi`, `jinja2`, `requests`, `yaml`) succeed, and the local browser automation toolchain (`node`, `npm`, `npx`, plus Playwright CLI or wrapper) is available before continuing.
 
 ## Architecture
 

@@ -19,6 +19,7 @@ cd "$ROOT_DIR"
 
 LOCAL_VENV_DIR="$ROOT_DIR/.venv"
 LOCAL_PYTHON=""
+PLAYWRIGHT_WRAPPER="${CODEX_HOME:-$HOME/.codex}/skills/playwright/scripts/playwright_cli.sh"
 if [[ -x "$LOCAL_VENV_DIR/bin/python3" ]]; then
   export PATH="$LOCAL_VENV_DIR/bin:$PATH"
   LOCAL_PYTHON="$LOCAL_VENV_DIR/bin/python3"
@@ -96,6 +97,17 @@ require_cmd git
 require_cmd ssh
 require_cmd curl
 require_cmd python3
+require_cmd node
+require_cmd npm
+require_cmd npx
+
+if command -v playwright-cli >/dev/null 2>&1; then
+  pass "command 'playwright-cli' found"
+elif [[ -x "$PLAYWRIGHT_WRAPPER" ]] && command -v npx >/dev/null 2>&1; then
+  pass "playwright wrapper detected at $PLAYWRIGHT_WRAPPER"
+else
+  fail "playwright browser automation missing (install global playwright-cli or ensure wrapper exists at $PLAYWRIGHT_WRAPPER)"
+fi
 
 if [[ -x "$LOCAL_VENV_DIR/bin/python3" || -x "$LOCAL_VENV_DIR/bin/python" ]]; then
   pass "repo virtualenv detected at $LOCAL_VENV_DIR"
@@ -254,10 +266,14 @@ Recommended fixes:
    source /Users/rpias/dev/safety-monitor/.venv/bin/activate
    pip install --upgrade pip
    pip install -r /Users/rpias/dev/safety-monitor/requirements.txt
-3) GitHub auth:
+3) Local UI automation bootstrap:
+   brew install node
+   npm install -g @playwright/cli@latest
+   playwright-cli --help
+4) GitHub auth:
    gh auth login -h github.com -p https --web
    gh auth setup-git
-4) CT104 key login test:
+5) CT104 key login test:
    ssh -i /Users/rpias/dev/vscode-dev-env/.notes_access/ssh/ct104_root_ed25519 -o IdentitiesOnly=yes root@192.168.2.105
 5) Verify repo remote:
    git remote set-url origin https://github.com/rpiasentin/safety-monitor.git

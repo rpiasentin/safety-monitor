@@ -2,6 +2,8 @@
 
 - Use the repo-local virtualenv at `.venv` for all local validation work.
 - Required local runtime is Python `3.11+`.
+- Required local UI automation runtime is Node.js with `npm` and `npx`.
+- Prefer a working `playwright-cli` install for browser verification; the Codex Playwright wrapper is an acceptable fallback when `npx` is present.
 - Preferred commands:
   - `source .venv/bin/activate`
   - `make preflight`

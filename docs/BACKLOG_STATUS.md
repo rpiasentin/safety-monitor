@@ -1,6 +1,6 @@
 # Safety Monitor Backlog Status
 
-Last updated: 2026-03-08 (local agent tooling hardening)
+Last updated: 2026-03-08 (local agent tooling + browser automation hardening)
 
 ## Delivered In This Pass
 
@@ -95,11 +95,16 @@ Last updated: 2026-03-08 (local agent tooling hardening)
   - `AGENTS.md`
 - Added Python version pin for local development:
   - `.python-version` => `3.11`
+- Added local browser automation bootstrap expectations:
+  - `node`, `npm`, `npx`
+  - `playwright-cli` or the Codex Playwright wrapper
 - Updated `tools/preflight_access.sh` to validate:
   - repo virtualenv exists at `.venv`
   - local Python runtime is `3.11+`
   - core imports succeed locally (`fastapi`, `jinja2`, `requests`, `yaml`)
+  - local browser automation commands are available before UI verification work begins
 - Updated README bootstrap instructions so new agents can reproduce the same local setup before touching deploys.
+- Verified headed browser access against the live CT104 dashboard through a local SSH tunnel.
 
 ## Suggested Next Slice
 
