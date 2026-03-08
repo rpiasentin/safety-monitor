@@ -56,6 +56,15 @@ def _collector_for(property_id: str, coll_cfg: dict):
     return None
 
 
+def _device_index(rows: list[dict] | None) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for row in (rows or []):
+        did = str(row.get("entity_id") or "").strip()
+        if did:
+            out[did] = row
+    return out
+
+
 class PropertyCollector:
     """Manages all collectors for a single property and merges their output."""
 
@@ -142,6 +151,7 @@ class PropertyCollector:
         # Build rolled-up fields (canonical field names matching db schema)
         snapshot.update(_rollup(snapshot["sources"]))
         self._apply_stale_tesla_fallback(snapshot)
+        self._record_safety_transition_events(snapshot)
 
         # Persist one "merged" row that the dashboard queries — guarantees
         # a single complete row per property rather than one row per source.
@@ -149,6 +159,89 @@ class PropertyCollector:
             db.upsert_reading(self.prop_id, "merged", snapshot)
 
         return snapshot
+
+    def _record_safety_transition_events(self, snapshot: dict[str, Any]) -> None:
+        prev = db.get_latest_reading(self.prop_id, source="merged")
+        if not prev:
+            return
+        try:
+            prev_raw = json.loads(prev.get("raw_json") or "{}")
+        except Exception:
+            prev_raw = {}
+        if not isinstance(prev_raw, dict):
+            return
+
+        prev_water = _device_index(prev_raw.get("water_sensors") or [])
+        cur_water = _device_index(snapshot.get("water_sensors") or [])
+        for sensor_id, cur_row in cur_water.items():
+            cur_state = str(cur_row.get("state") or "").strip().lower()
+            prev_state = str((prev_water.get(sensor_id) or {}).get("state") or "").strip().lower()
+            if cur_state == "wet" and prev_state != "wet":
+                db.insert_system_event(
+                    event_type="water_sensor_wet",
+                    level="warning",
+                    property_id=self.prop_id,
+                    actor="collector",
+                    message=f"Water sensor reports wet: {cur_row.get('friendly_name') or sensor_id}",
+                    details={
+                        "sensor_id": sensor_id,
+                        "friendly_name": cur_row.get("friendly_name") or sensor_id,
+                        "previous_state": prev_state or "unknown",
+                        "current_state": cur_state,
+                        "last_activity": cur_row.get("last_activity"),
+                    },
+                )
+            elif prev_state == "wet" and cur_state and cur_state != "wet":
+                db.insert_system_event(
+                    event_type="water_sensor_cleared",
+                    level="info",
+                    property_id=self.prop_id,
+                    actor="collector",
+                    message=f"Water sensor cleared: {cur_row.get('friendly_name') or sensor_id}",
+                    details={
+                        "sensor_id": sensor_id,
+                        "friendly_name": cur_row.get("friendly_name") or sensor_id,
+                        "previous_state": prev_state,
+                        "current_state": cur_state,
+                        "last_activity": cur_row.get("last_activity"),
+                    },
+                )
+
+        prev_valves = _device_index(prev_raw.get("valve_devices") or [])
+        cur_valves = _device_index(snapshot.get("valve_devices") or [])
+        for device_id, cur_row in cur_valves.items():
+            cur_state = str(cur_row.get("state") or "").strip().lower()
+            prev_state = str((prev_valves.get(device_id) or {}).get("state") or "").strip().lower()
+            if cur_state == "closed" and prev_state != "closed":
+                db.insert_system_event(
+                    event_type="water_shutoff_closed",
+                    level="warning",
+                    property_id=self.prop_id,
+                    actor="collector",
+                    message=f"Shutoff valve closed: {cur_row.get('friendly_name') or device_id}",
+                    details={
+                        "device_id": device_id,
+                        "friendly_name": cur_row.get("friendly_name") or device_id,
+                        "previous_state": prev_state or "unknown",
+                        "current_state": cur_state,
+                        "last_activity": cur_row.get("last_activity"),
+                    },
+                )
+            elif prev_state == "closed" and cur_state == "open":
+                db.insert_system_event(
+                    event_type="water_shutoff_opened",
+                    level="info",
+                    property_id=self.prop_id,
+                    actor="collector",
+                    message=f"Shutoff valve opened: {cur_row.get('friendly_name') or device_id}",
+                    details={
+                        "device_id": device_id,
+                        "friendly_name": cur_row.get("friendly_name") or device_id,
+                        "previous_state": prev_state,
+                        "current_state": cur_state,
+                        "last_activity": cur_row.get("last_activity"),
+                    },
+                )
 
     def _apply_stale_tesla_fallback(self, snapshot: dict[str, Any]) -> None:
         """
@@ -330,6 +423,7 @@ def _rollup(sources: dict) -> dict:
     # Water/leak sensors (latched critical alert uses these states)
     out["water_sensors"] = (ha.get("water_sensors") or []) + \
                              (hub.get("water_sensors") or [])
+    out["valve_devices"] = list(hub.get("valve_devices") or [])
 
     # Property security/safety rollups (currently from Hubitat cloud feeds)
     out["lock_devices"] = list(hub.get("lock_devices") or [])

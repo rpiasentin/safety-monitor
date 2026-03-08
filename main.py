@@ -484,6 +484,10 @@ def _expected_lock_state(action: str) -> str:
     return "locked" if str(action or "").strip().lower() == "lock" else "unlocked"
 
 
+def _expected_valve_state(action: str) -> str:
+    return "open" if str(action or "").strip().lower() == "open" else "closed"
+
+
 def _verify_lock_transition(client: HubitatCloudClient,
                             expected_states: dict[str, str],
                             name_hints: dict[str, str] | None = None,
@@ -571,6 +575,93 @@ def _record_lock_state_unchanged(property_id: str,
     return warnings
 
 
+def _verify_valve_transition(client: HubitatCloudClient,
+                             expected_states: dict[str, str],
+                             name_hints: dict[str, str] | None = None,
+                             polls: int = 4,
+                             wait_seconds: int = 3) -> dict:
+    """
+    Poll Hubitat valve states after a command and report devices that did not
+    transition to the expected state.
+    """
+    pending: dict[str, dict] = {}
+    for device_id, expected in (expected_states or {}).items():
+        did = str(device_id).strip()
+        if not did:
+            continue
+        pending[did] = {
+            "device_id": did,
+            "expected_state": str(expected or "").strip().lower(),
+            "observed_state": "unknown",
+            "friendly_name": (name_hints or {}).get(did) or did,
+        }
+
+    polls = max(1, int(polls))
+    wait_seconds = max(1, int(wait_seconds))
+
+    for attempt in range(polls):
+        if attempt > 0:
+            time.sleep(wait_seconds)
+
+        try:
+            current = client.get_valve_devices()
+        except Exception as exc:
+            logger.warning("Valve transition verification poll failed: %s", exc)
+            continue
+
+        by_id = {str(x.get("entity_id")): x for x in current}
+        for did in list(pending.keys()):
+            row = pending[did]
+            cur = by_id.get(did, {})
+            observed = str(cur.get("state") or "unknown").strip().lower()
+            row["observed_state"] = observed
+            if cur.get("friendly_name"):
+                row["friendly_name"] = cur.get("friendly_name")
+            if observed == row["expected_state"]:
+                del pending[did]
+
+        if not pending:
+            break
+
+    unresolved = sorted(pending.values(), key=lambda x: str(x.get("friendly_name") or x.get("device_id")))
+    return {
+        "ok": len(unresolved) == 0,
+        "unresolved": unresolved,
+    }
+
+
+def _record_valve_state_unchanged(property_id: str,
+                                  action: str,
+                                  unresolved: list[dict]) -> list[dict]:
+    warnings = []
+    for row in (unresolved or []):
+        did = str(row.get("device_id") or "").strip()
+        if not did:
+            continue
+        name = row.get("friendly_name") or did
+        expected = str(row.get("expected_state") or "").strip().lower()
+        observed = str(row.get("observed_state") or "").strip().lower() or "unknown"
+        msg = f"Command sent but valve status not changing: {name} stayed {observed}"
+        details = {
+            "device_id": did,
+            "friendly_name": name,
+            "action": str(action or "").strip().lower(),
+            "expected_state": expected,
+            "observed_state": observed,
+            "message": "Command sent but valve status not changing",
+        }
+        _record_system_event(
+            event_type="valve_command_state_unchanged",
+            level="warning",
+            property_id=property_id,
+            actor="api",
+            message=msg,
+            details=details,
+        )
+        warnings.append(details)
+    return warnings
+
+
 def _recent_lock_warning_map(limit: int = 300) -> dict[str, dict[str, dict]]:
     """
     Build latest warning lookup: property_id -> device_id -> warning details.
@@ -591,6 +682,54 @@ def _recent_lock_warning_map(limit: int = 300) -> dict[str, dict[str, dict]]:
             "created_at": ev.get("created_at"),
             "expected_state": str(details.get("expected_state") or "").strip().lower(),
             "message": str(details.get("message") or ev.get("message") or "").strip(),
+        }
+    return out
+
+
+def _recent_valve_warning_map(limit: int = 300) -> dict[str, dict[str, dict]]:
+    rows = db.get_system_events(limit=limit, event_type="valve_command_state_unchanged")
+    events = _decode_system_event_rows(rows)
+    out: dict[str, dict[str, dict]] = {}
+    for ev in events:
+        pid = str(ev.get("property_id") or "").strip()
+        details = ev.get("details") or {}
+        did = str(details.get("device_id") or "").strip()
+        if not pid or not did:
+            continue
+        out.setdefault(pid, {})
+        if did in out[pid]:
+            continue
+        out[pid][did] = {
+            "created_at": ev.get("created_at"),
+            "expected_state": str(details.get("expected_state") or "").strip().lower(),
+            "message": str(details.get("message") or ev.get("message") or "").strip(),
+        }
+    return out
+
+
+def _recent_device_event_map(event_types: set[str],
+                             detail_key: str,
+                             limit: int = 400) -> dict[str, dict[str, dict]]:
+    rows = db.get_system_events(limit=limit)
+    events = _decode_system_event_rows(rows)
+    out: dict[str, dict[str, dict]] = {}
+    wanted = {str(x or "").strip().lower() for x in (event_types or set())}
+    for ev in events:
+        event_type = str(ev.get("event_type") or "").strip().lower()
+        if event_type not in wanted:
+            continue
+        pid = str(ev.get("property_id") or "").strip()
+        details = ev.get("details") or {}
+        did = str(details.get(detail_key) or "").strip()
+        if not pid or not did:
+            continue
+        out.setdefault(pid, {})
+        if did in out[pid]:
+            continue
+        out[pid][did] = {
+            "created_at": ev.get("created_at"),
+            "event_type": event_type,
+            "message": str(ev.get("message") or "").strip(),
         }
     return out
 
@@ -619,6 +758,72 @@ def _decorate_lock_devices(lock_devices: list[dict]) -> tuple[list[dict], dict]:
             counts["other"] += 1
         row["status"] = status
         row["state_label"] = state_label
+        decorated.append(row)
+    return decorated, counts
+
+
+def _decorate_water_devices(water_devices: list[dict],
+                            collected_at: str | None = None,
+                            recent_event_map: dict[str, dict] | None = None) -> tuple[list[dict], dict]:
+    decorated = []
+    counts = {"wet": 0, "dry": 0, "other": 0}
+    recent_event_map = recent_event_map or {}
+    for sensor in (water_devices or []):
+        row = dict(sensor)
+        state = str(row.get("state") or "unknown").strip().lower()
+        if state == "wet":
+            status = "critical"
+            state_label = "Wet"
+            counts["wet"] += 1
+        elif state == "dry":
+            status = "good"
+            state_label = "Dry"
+            counts["dry"] += 1
+        else:
+            status = "unknown"
+            state_label = state.replace("_", " ").title() if state else "Unknown"
+            counts["other"] += 1
+        row["status"] = status
+        row["state_label"] = state_label
+        row["activity"] = _maker_device_activity(row.get("last_activity"), collected_at)
+        event = recent_event_map.get(str(row.get("entity_id") or "").strip())
+        row["recent_event"] = event
+        row["recent_event_age"] = formatters.ago(event.get("created_at")) if event else ""
+        decorated.append(row)
+    return decorated, counts
+
+
+def _decorate_valve_devices(valve_devices: list[dict],
+                            collected_at: str | None = None,
+                            recent_event_map: dict[str, dict] | None = None) -> tuple[list[dict], dict]:
+    decorated = []
+    counts = {"open": 0, "closed": 0, "other": 0}
+    recent_event_map = recent_event_map or {}
+    for valve in (valve_devices or []):
+        row = dict(valve)
+        state = str(row.get("state") or "unknown").strip().lower()
+        if state == "open":
+            status = "good"
+            state_label = "Open"
+            counts["open"] += 1
+        elif state == "closed":
+            status = "critical"
+            state_label = "Closed"
+            counts["closed"] += 1
+        elif state in {"opening", "closing"}:
+            status = "warning"
+            state_label = state.title()
+            counts["other"] += 1
+        else:
+            status = "unknown"
+            state_label = state.replace("_", " ").title() if state else "Unknown"
+            counts["other"] += 1
+        row["status"] = status
+        row["state_label"] = state_label
+        row["activity"] = _maker_device_activity(row.get("last_activity"), collected_at)
+        event = recent_event_map.get(str(row.get("entity_id") or "").strip())
+        row["recent_event"] = event
+        row["recent_event_age"] = formatters.ago(event.get("created_at")) if event else ""
         decorated.append(row)
     return decorated, counts
 
@@ -786,6 +991,17 @@ async def dashboard(request: Request):
     global_water_cfg = global_alerts_cfg.get("water", {})
     global_smoke_cfg = global_alerts_cfg.get("smoke", {})
     lock_warning_map = _recent_lock_warning_map(limit=500)
+    valve_warning_map = _recent_valve_warning_map(limit=500)
+    water_event_map = _recent_device_event_map(
+        {"water_sensor_wet", "water_sensor_cleared"},
+        "sensor_id",
+        limit=500,
+    )
+    valve_event_map = _recent_device_event_map(
+        {"water_shutoff_closed", "water_shutoff_opened", "valve_command_state_unchanged"},
+        "device_id",
+        limit=500,
+    )
     cards = []
     for p in props:
         pid  = p["id"]
@@ -827,10 +1043,22 @@ async def dashboard(request: Request):
             ))
 
         hub_payload = _parse_raw_payload(source_rows.get("hubitat_cloud"))
+        hub_collected_at = source_rows.get("hubitat_cloud", {}).get("collected_at") if source_rows.get("hubitat_cloud") else None
         lock_devices, lock_counts = _decorate_lock_devices(
             list(hub_payload.get("lock_devices") or [])
         )
+        valve_devices, valve_counts = _decorate_valve_devices(
+            list(hub_payload.get("valve_devices") or []),
+            collected_at=hub_collected_at,
+            recent_event_map=valve_event_map.get(pid) or {},
+        )
+        water_devices, water_counts = _decorate_water_devices(
+            list(hub_payload.get("water_sensors") or []),
+            collected_at=hub_collected_at,
+            recent_event_map=water_event_map.get(pid) or {},
+        )
         prop_lock_warnings = lock_warning_map.get(pid) or {}
+        prop_valve_warnings = valve_warning_map.get(pid) or {}
         for lock in lock_devices:
             did = str(lock.get("entity_id") or "").strip()
             warning = prop_lock_warnings.get(did)
@@ -841,6 +1069,15 @@ async def dashboard(request: Request):
             observed = str(lock.get("state") or "").strip().lower()
             # Hide stale warning once lock converges to expected state.
             lock["command_warning"] = warning if (not expected or observed != expected) else None
+        for valve in valve_devices:
+            did = str(valve.get("entity_id") or "").strip()
+            warning = prop_valve_warnings.get(did)
+            if not warning:
+                valve["command_warning"] = None
+                continue
+            expected = str(warning.get("expected_state") or "").strip().lower()
+            observed = str(valve.get("state") or "").strip().lower()
+            valve["command_warning"] = warning if (not expected or observed != expected) else None
         smoke_state_map = db.get_smoke_sensor_state_map(pid)
         smoke_devices, smoke_counts = _decorate_smoke_devices(
             list(hub_payload.get("smoke_devices") or []),
@@ -859,8 +1096,12 @@ async def dashboard(request: Request):
             "source_warnings": source_warnings,
             "lock_devices":   lock_devices,
             "lock_counts":    lock_counts,
+            "valve_devices":  valve_devices,
+            "valve_counts":   valve_counts,
             "smoke_devices":  smoke_devices,
             "smoke_counts":   smoke_counts,
+            "water_devices":  water_devices,
+            "water_counts":   water_counts,
             "smoke_sustain_minutes": int(pcfg.get("smoke_sustain_minutes",
                                       global_smoke_cfg.get("sustain_minutes", 3))),
             "smoke_mute_default_minutes": int(pcfg.get("smoke_mute_default_minutes",
@@ -1475,6 +1716,169 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
     )
     if not verify.get("ok"):
         warnings = _record_lock_state_unchanged(
+            property_id=property_id,
+            action=cmd,
+            unresolved=verify.get("unresolved") or [],
+        )
+
+    _schedule_collection_refresh(
+        retries=4,
+        wait_seconds=8,
+        always_run=True,
+        initial_delay=2,
+    )
+    return JSONResponse(content={
+        "status": "ok",
+        "property_id": property_id,
+        "device_id": str(device_id),
+        "action": cmd,
+        "result": result,
+        "warning": (warnings[0] if warnings else None),
+    })
+
+
+@app.post("/api/property/{property_id}/valves/all/{action}")
+async def api_valve_all(property_id: str, action: str,
+                        _auth=Depends(_require_write_auth)):
+    """Open/close all shutoff valves for a property via Hubitat Maker API."""
+    cmd = str(action or "").strip().lower()
+    if cmd not in {"open", "close"}:
+        return JSONResponse(status_code=400, content={"error": "Action must be 'open' or 'close'"})
+
+    prop = _get_property_cfg(property_id)
+    if not prop:
+        return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+
+    client = _hubitat_client_for_property(property_id)
+    if not client:
+        return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
+
+    try:
+        valves = client.get_valve_devices()
+        result = client.command_valves(cmd, valves)
+    except Exception as exc:
+        _record_system_event(
+            event_type="valve_command_all_failed",
+            level="error",
+            property_id=property_id,
+            actor="api",
+            message=f"{cmd.title()} all shutoff valves failed",
+            details={"error": str(exc)},
+        )
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+    _record_system_event(
+        event_type="valve_command_all",
+        level="warning" if cmd == "close" else "info",
+        property_id=property_id,
+        actor="api",
+        message=f"{cmd.title()} all shutoff valves requested",
+        details={
+            "attempted": result.get("attempted"),
+            "succeeded": result.get("succeeded"),
+            "failed": result.get("failed"),
+        },
+    )
+
+    attempted_ids = []
+    name_hints: dict[str, str] = {}
+    for row in (result.get("results") or []):
+        did = str(row.get("device_id") or "").strip()
+        if not did:
+            continue
+        attempted_ids.append(did)
+        name_hints[did] = str(row.get("friendly_name") or did)
+
+    warnings: list[dict] = []
+    if attempted_ids:
+        expected = _expected_valve_state(cmd)
+        verify = _verify_valve_transition(
+            client,
+            expected_states={did: expected for did in attempted_ids},
+            name_hints=name_hints,
+            polls=4,
+            wait_seconds=3,
+        )
+        if not verify.get("ok"):
+            warnings = _record_valve_state_unchanged(
+                property_id=property_id,
+                action=cmd,
+                unresolved=verify.get("unresolved") or [],
+            )
+
+    _schedule_collection_refresh(
+        retries=4,
+        wait_seconds=8,
+        always_run=True,
+        initial_delay=2,
+    )
+    return JSONResponse(content={
+        "status": "ok",
+        "property_id": property_id,
+        "action": cmd,
+        "result": result,
+        "warning": ({
+            "message": f"Command sent but valve status not changing for {len(warnings)} valve(s)",
+            "count": len(warnings),
+            "devices": warnings,
+        } if warnings else None),
+    })
+
+
+@app.post("/api/property/{property_id}/valves/{device_id}/{action}")
+async def api_valve_device(property_id: str, device_id: str, action: str,
+                           _auth=Depends(_require_write_auth)):
+    """Open/close one shutoff valve device for a property."""
+    cmd = str(action or "").strip().lower()
+    if cmd not in {"open", "close"}:
+        return JSONResponse(status_code=400, content={"error": "Action must be 'open' or 'close'"})
+
+    prop = _get_property_cfg(property_id)
+    if not prop:
+        return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+
+    client = _hubitat_client_for_property(property_id)
+    if not client:
+        return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
+
+    valve_name = device_id
+    try:
+        known_valves = client.get_valve_devices()
+        for valve in known_valves:
+            if str(valve.get("entity_id")) == str(device_id):
+                valve_name = valve.get("friendly_name") or device_id
+                break
+        result = client.command_device(device_id, cmd)
+    except Exception as exc:
+        _record_system_event(
+            event_type="valve_command_failed",
+            level="error",
+            property_id=property_id,
+            actor="api",
+            message=f"{cmd.title()} shutoff valve failed: {valve_name}",
+            details={"device_id": str(device_id), "error": str(exc)},
+        )
+        return JSONResponse(status_code=502, content={"error": str(exc)})
+
+    _record_system_event(
+        event_type="valve_command",
+        level="warning" if cmd == "close" else "info",
+        property_id=property_id,
+        actor="api",
+        message=f"{cmd.title()} shutoff valve requested: {valve_name}",
+        details={"device_id": str(device_id), "friendly_name": valve_name},
+    )
+
+    warnings: list[dict] = []
+    verify = _verify_valve_transition(
+        client,
+        expected_states={str(device_id): _expected_valve_state(cmd)},
+        name_hints={str(device_id): str(valve_name)},
+        polls=4,
+        wait_seconds=3,
+    )
+    if not verify.get("ok"):
+        warnings = _record_valve_state_unchanged(
             property_id=property_id,
             action=cmd,
             unresolved=verify.get("unresolved") or [],

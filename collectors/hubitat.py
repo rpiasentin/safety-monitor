@@ -58,7 +58,7 @@ class HubitatCloudClient:
         names: set[str] = set()
         for cmd in (device.get("commands") or []):
             if isinstance(cmd, dict):
-                name = cmd.get("name")
+                name = cmd.get("name") or cmd.get("command")
             else:
                 name = cmd
             if name:
@@ -66,9 +66,9 @@ class HubitatCloudClient:
         return names
 
     def command_device(self, device_id: str, command: str) -> dict:
-        """Invoke a Maker API command for a single device (lock/unlock)."""
+        """Invoke a Maker API command for a single device."""
         cmd = str(command or "").strip().lower()
-        if cmd not in {"lock", "unlock"}:
+        if cmd not in {"lock", "unlock", "open", "close"}:
             raise ValueError(f"Unsupported Hubitat command: {command}")
         url = f"{self._command_base()}/devices/{device_id}/{cmd}"
         resp = requests.get(
@@ -135,6 +135,53 @@ class HubitatCloudClient:
             "results": results,
         }
 
+    def command_valves(self, command: str, valves: list[dict] | None = None) -> dict:
+        """
+        Run open/close for all valve devices in the property.
+        Returns {attempted, succeeded, failed, results}.
+        """
+        cmd = str(command or "").strip().lower()
+        if cmd not in {"open", "close"}:
+            raise ValueError(f"Unsupported Hubitat command: {command}")
+
+        if valves is None:
+            valves = self.get_valve_devices()
+
+        results = []
+        attempted = 0
+        succeeded = 0
+
+        capability_key = f"can_{cmd}"
+        for valve in valves:
+            if valve.get(capability_key) is False:
+                continue
+            device_id = str(valve.get("entity_id") or "").strip()
+            if not device_id:
+                continue
+
+            attempted += 1
+            try:
+                res = self.command_device(device_id, cmd)
+                res["friendly_name"] = valve.get("friendly_name") or device_id
+                results.append(res)
+                succeeded += 1
+            except Exception as exc:
+                results.append({
+                    "device_id": device_id,
+                    "friendly_name": valve.get("friendly_name") or device_id,
+                    "command": cmd,
+                    "ok": False,
+                    "error": str(exc),
+                })
+
+        failed = attempted - succeeded
+        return {
+            "attempted": attempted,
+            "succeeded": succeeded,
+            "failed": failed,
+            "results": results,
+        }
+
     @staticmethod
     def _attr_value(attrs, key: str):
         """Extract a value from attributes whether dict or list format."""
@@ -146,12 +193,33 @@ class HubitatCloudClient:
                 return attr.get("currentValue")
         return None
 
+    def _is_valve_device(self, device: dict) -> bool:
+        attrs = device.get("attributes", {})
+        raw_state = self._attr_value(attrs, "valve")
+        capabilities = {
+            str(cap or "").strip().lower()
+            for cap in (device.get("capabilities") or [])
+            if str(cap or "").strip()
+        }
+        dev_type = str(device.get("type", "")).lower()
+        label = str(device.get("label") or device.get("name") or "").lower()
+        return bool(
+            raw_state is not None
+            or "valve" in capabilities
+            or "valve" in dev_type
+            or "valve" in label
+            or "shutoff" in dev_type
+            or "shutoff" in label
+        )
+
     def get_temperature_sensors(self, devices: list[dict] | None = None) -> dict[str, float]:
         """Return {device_label: °F}. Hubitat reports in °F by default."""
         if devices is None:
             devices = self.get_all_devices()
         result: dict[str, float] = {}
         for d in devices:
+            if self._is_valve_device(d):
+                continue
             attrs = d.get("attributes", {})
             val = self._attr_value(attrs, "temperature")
             if val is not None:
@@ -313,6 +381,60 @@ class HubitatCloudClient:
         return out
 
     @staticmethod
+    def _normalize_valve_state(raw_state) -> str:
+        if raw_state is None:
+            return "unknown"
+        s = str(raw_state).strip().lower()
+        if s in {"open", "opened"}:
+            return "open"
+        if s in {"closed", "close"}:
+            return "closed"
+        if s in {"opening"}:
+            return "opening"
+        if s in {"closing"}:
+            return "closing"
+        if s in {"unknown", "unavailable"}:
+            return s
+        return s
+
+    def get_valve_devices(self, devices: list[dict] | None = None) -> list[dict]:
+        """Return shutoff valve state + command capability for all valve devices."""
+        if devices is None:
+            devices = self.get_all_devices()
+
+        out = []
+        for d in devices:
+            if not self._is_valve_device(d):
+                continue
+
+            attrs = d.get("attributes", {})
+            commands = self._command_names(d)
+            raw_state = self._attr_value(attrs, "valve")
+            state = self._normalize_valve_state(raw_state)
+            can_open = ("open" in commands) or state in {"closed", "closing"}
+            can_close = ("close" in commands) or state in {"open", "opening"}
+
+            out.append({
+                "entity_id": str(d.get("id")),
+                "friendly_name": d.get("label") or d.get("name") or f"Device {d.get('id')}",
+                "device_type": d.get("type", ""),
+                "state": state,
+                "water_state": self._normalize_water_state(self._attr_value(attrs, "water")),
+                "can_open": bool(can_open),
+                "can_close": bool(can_close),
+                "last_activity": self._normalize_ts(
+                    d.get("lastActivity")
+                    or d.get("last_activity")
+                    or d.get("date")
+                    or self._attr_value(attrs, "lastActivity")
+                    or self._attr_value(attrs, "last_activity")
+                    or self._attr_value(attrs, "date")
+                ),
+            })
+
+        return out
+
+    @staticmethod
     def _normalize_water_state(raw_state) -> str | None:
         """Map vendor-specific leak states to canonical wet/dry values."""
         if raw_state is None:
@@ -416,6 +538,8 @@ class HubitatCloudClient:
 
         out = []
         for d in devices:
+            if self._is_valve_device(d):
+                continue
             attrs = d.get("attributes", {})
             raw_state = self._attr_value(attrs, "water")
             if raw_state is None:
@@ -466,6 +590,7 @@ class HubitatCloudCollector(BaseCollector):
         batts      = self.client.get_battery_devices(devices)
         all_devs   = self.client.get_all_devices_with_activity(devices)
         locks      = self.client.get_lock_devices(devices)
+        valves     = self.client.get_valve_devices(devices)
         smokes     = self.client.get_smoke_sensors(devices)
         waters     = self.client.get_water_sensors(devices)
 
@@ -480,8 +605,9 @@ class HubitatCloudCollector(BaseCollector):
             "primary_temp":    primary_temp,
             "battery_devices": batts,
             "lock_devices":    locks,
+            "valve_devices":   valves,
             "smoke_devices":   smokes,
-            "water_sensors":  waters,
+            "water_sensors":   waters,
             # Full device list with lastActivity — used for device activity view
             "all_devices":     all_devs,
         })

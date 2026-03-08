@@ -115,6 +115,9 @@ Operational details:
 - Lock control endpoints:
   - `POST /api/property/{property_id}/locks/all/{lock|unlock}`
   - `POST /api/property/{property_id}/locks/{device_id}/{lock|unlock}`
+- Shutoff valve control endpoints:
+  - `POST /api/property/{property_id}/valves/all/{open|close}`
+  - `POST /api/property/{property_id}/valves/{device_id}/{open|close}`
 - Smoke control endpoints:
   - `POST /api/property/{property_id}/smoke/{sensor_id}/ack`
   - `POST /api/property/{property_id}/smoke/{sensor_id}/mute/{minutes}`

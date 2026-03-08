@@ -1,10 +1,25 @@
 # Safety Monitor Backlog Status
 
-Last updated: 2026-03-05 (controlled hardening pass)
+Last updated: 2026-03-07 (water/valve incident hardening)
 
 ## Delivered In This Pass
 
-0. Notification/deploy hardening
+0. Water leak incident hardening
+- Separated Hubitat shutoff valves from generic water sensors.
+- Added property-card safety visibility for:
+  - water sensors
+  - shutoff valves
+- Added shutoff valve controls from the dashboard:
+  - open/close per valve
+  - open/close all valves for a property
+- Added collector-side transition logging for:
+  - `water_sensor_wet`
+  - `water_sensor_cleared`
+  - `water_shutoff_closed`
+  - `water_shutoff_opened`
+- Fixed valve misclassification so devices like the Lariat main shutoff no longer appear as leak sensors.
+
+1. Notification/deploy hardening
 - Added deterministic alert-rule regression matrix script:
   - `tools/notification_rules_matrix.py`
   - Covers push toggles for temperature, battery, water, smoke, offline
@@ -17,18 +32,18 @@ Last updated: 2026-03-05 (controlled hardening pass)
 - Preflight now validates CT104 `config.yaml` ownership and can auto-fix to:
   - `safetymon:safetymon`
 
-1. Hubitat device lifecycle hardening
+2. Hubitat device lifecycle hardening
 - Added auto-pruning for `hubitat_devices` records when devices disappear from Hubitat.
 - Kept prune safety guard: no mass delete on empty/invalid upstream payloads.
 
-2. Critical decision traceability
+3. Critical decision traceability
 - Added persistent `system_events` table in SQLite.
 - Added event helpers in `db.py`.
 - Added dedicated page: `/decisions`.
 - Added API endpoint: `GET /api/system/decisions`.
 - Wired key operator/system actions into event logging.
 
-3. Property lock controls
+4. Property lock controls
 - Added lock state extraction from Hubitat feed.
 - Added property-card lock indicators.
 - Added action endpoints:
@@ -36,21 +51,21 @@ Last updated: 2026-03-05 (controlled hardening pass)
   - `POST /api/property/{property_id}/locks/{device_id}/{lock|unlock}`
 - Added dashboard controls for lock/unlock all and per-lock actions.
 
-4. Property smoke/CO visibility
+5. Property smoke/CO visibility
 - Added smoke/CO state extraction from Hubitat feed.
 - Added smoke/CO status panel to each property card.
 
-5. Mobile usability pass
+6. Mobile usability pass
 - Kept thumb-safe control sizing for new lock actions.
 - Updated property safety rows for smaller screens.
 
-6. Home Assistant Tesla resilience
+7. Home Assistant Tesla resilience
 - Added Home Assistant feed-health box support for properties using `ha_api`.
 - Added time-bounded stale Tesla/Powerwall fallback when HA feed is temporarily unavailable.
 - Added warning text on property cards while stale fallback is active.
 - Added decision-log event type: `stale_tesla_fallback_applied`.
 
-7. Smoke/CO escalation + controls
+8. Smoke/CO escalation + controls
 - Added sustained smoke/CO alarm escalation policy (`alerts.smoke.sustain_minutes`).
 - Added smoke alarm alert type with persistent active alerts until clear/ack.
 - Added per-sensor smoke controls on property cards:
@@ -59,7 +74,7 @@ Last updated: 2026-03-05 (controlled hardening pass)
   - unmute
 - Added audit events for smoke actions and alarm lifecycle.
 
-8. Decisions page scale improvements
+9. Decisions page scale improvements
 - Added cursor-based pagination for `/decisions`.
 - Added cursor support for `GET /api/system/decisions` via `cursor` query param + `X-Next-Cursor` header.
 - Added incident export endpoint:

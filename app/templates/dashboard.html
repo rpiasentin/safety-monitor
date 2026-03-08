@@ -690,10 +690,10 @@
           </div>
           {% endif %}
 
-          {% if card.lock_devices or card.smoke_devices %}
+          {% if card.lock_devices or card.smoke_devices or card.water_devices or card.valve_devices %}
           <div>
             <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">Property Safety</p>
-            <div class="property-safety-grid {% if card.lock_devices and card.smoke_devices %}two-up{% endif %}">
+            <div class="property-safety-layout {% if card.lock_devices and (card.smoke_devices or card.water_devices or card.valve_devices) %}two-column{% endif %}">
 
             {% if card.lock_devices %}
             <div class="property-safety-panel">
@@ -740,6 +740,8 @@
             </div>
             {% endif %}
 
+            {% if card.smoke_devices or card.water_devices or card.valve_devices %}
+            <div class="property-safety-stack">
             {% if card.smoke_devices %}
             <div class="property-safety-panel">
               <div class="property-safety-head">
@@ -794,6 +796,112 @@
                 {% endfor %}
               </div>
               <div id="{{ card.id }}_smoke_status" class="property-inline-status hidden"></div>
+            </div>
+            {% endif %}
+
+            {% if card.water_devices %}
+            <div class="property-safety-panel">
+              <div class="property-safety-head">
+                <span class="property-safety-title">Water Sensors</span>
+                <span class="property-safety-meta">
+                  {% if card.water_counts.wet > 0 %}
+                    {{ card.water_counts.wet }} wet
+                  {% elif card.water_counts.dry > 0 %}
+                    all dry
+                  {% else %}
+                    no status
+                  {% endif %}
+                </span>
+              </div>
+              <div class="property-safety-list">
+                {% for sensor in card.water_devices %}
+                <div class="property-safety-row">
+                  <div class="property-safety-name-wrap">
+                    <span class="property-safety-name">{{ sensor.friendly_name }}</span>
+                    {% if sensor.recent_event %}
+                    <span class="property-lock-warning">
+                      {% if sensor.recent_event.event_type == 'water_sensor_wet' %}
+                        wet seen {{ sensor.recent_event_age }}
+                      {% elif sensor.recent_event.event_type == 'water_sensor_cleared' %}
+                        cleared {{ sensor.recent_event_age }}
+                      {% else %}
+                        {{ sensor.recent_event.message }}
+                      {% endif %}
+                    </span>
+                    {% endif %}
+                    <span class="property-safety-note">
+                      activity {{ sensor.activity.last_activity }}
+                    </span>
+                  </div>
+                  <span class="property-state-pill state-{{ sensor.status }}">{{ sensor.state_label }}</span>
+                  <div class="property-row-actions"></div>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            {% endif %}
+
+            {% if card.valve_devices %}
+            <div class="property-safety-panel">
+              <div class="property-safety-head">
+                <span class="property-safety-title">Shutoff Valves</span>
+                <span class="property-safety-meta">
+                  {{ card.valve_counts.open }} open · {{ card.valve_counts.closed }} closed
+                </span>
+              </div>
+              <div class="property-lock-actions">
+                <button onclick='runValveAction({{ card.id|tojson }}, "open", "all")'
+                        class="property-action-btn action-open">Open all</button>
+                <button onclick='runValveAction({{ card.id|tojson }}, "close", "all")'
+                        class="property-action-btn action-close">Close all</button>
+              </div>
+              <div class="property-safety-list">
+                {% for valve in card.valve_devices %}
+                <div class="property-safety-row">
+                  <div class="property-safety-name-wrap">
+                    <span class="property-safety-name">{{ valve.friendly_name }}</span>
+                    {% if valve.command_warning %}
+                    <span class="property-lock-warning">
+                      ⚠ command sent but status not changing
+                    </span>
+                    {% endif %}
+                    {% if valve.recent_event %}
+                    <span class="property-lock-warning">
+                      {% if valve.recent_event.event_type == 'water_shutoff_closed' %}
+                        closed {{ valve.recent_event_age }}
+                      {% elif valve.recent_event.event_type == 'water_shutoff_opened' %}
+                        opened {{ valve.recent_event_age }}
+                      {% else %}
+                        {{ valve.recent_event.message }}
+                      {% endif %}
+                    </span>
+                    {% endif %}
+                    <span class="property-safety-note">
+                      activity {{ valve.activity.last_activity }}
+                      {% if valve.water_state and valve.water_state != 'dry' %}
+                        · leak input {{ valve.water_state }}
+                      {% endif %}
+                    </span>
+                  </div>
+                  <span class="property-state-pill state-{{ valve.status }}">{{ valve.state_label }}</span>
+                  <div class="property-row-actions">
+                    <button onclick='runValveAction({{ card.id|tojson }}, "open", {{ valve.entity_id|tojson }})'
+                            class="property-action-btn action-open"
+                            {% if not valve.can_open %}disabled{% endif %}>
+                      Open
+                    </button>
+                    <button onclick='runValveAction({{ card.id|tojson }}, "close", {{ valve.entity_id|tojson }})'
+                            class="property-action-btn action-close"
+                            {% if not valve.can_close %}disabled{% endif %}>
+                      Close
+                    </button>
+                  </div>
+                </div>
+                {% endfor %}
+              </div>
+              <div id="{{ card.id }}_valve_status" class="property-inline-status hidden"></div>
+            </div>
+            {% endif %}
             </div>
             {% endif %}
             </div>
@@ -1291,6 +1399,66 @@
           }
         }
         setTimeout(() => queueDashboardRefresh('lock-action', true), warning ? 1800 : 700);
+      } catch (e) {
+        if (statusEl) {
+          statusEl.textContent = `✗ ${e.message}`;
+          statusEl.classList.replace('text-gray-400', 'text-red-400');
+        } else {
+          alert(`${verb} failed: ${e.message}`);
+        }
+      }
+    }
+
+    async function runValveAction(pid, action, deviceId = 'all') {
+      const verb = action === 'open' ? 'Open' : 'Close';
+      const target = deviceId === 'all' ? `all shutoff valves for ${pid}` : `shutoff valve ${deviceId} at ${pid}`;
+      if (!confirm(`${verb} ${target}?`)) return;
+
+      const statusEl = document.getElementById(`${pid}_valve_status`);
+      if (statusEl) {
+        statusEl.classList.remove('hidden', 'text-green-400', 'text-red-400', 'text-yellow-300');
+        statusEl.classList.add('text-gray-400');
+        statusEl.textContent = `${verb} command in progress…`;
+      }
+
+      const url = (deviceId === 'all')
+        ? `/api/property/${encodeURIComponent(pid)}/valves/all/${encodeURIComponent(action)}`
+        : `/api/property/${encodeURIComponent(pid)}/valves/${encodeURIComponent(deviceId)}/${encodeURIComponent(action)}`;
+
+      try {
+        const resp = await fetch(url, { method: 'POST' });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          const msg = data.error || resp.status;
+          if (statusEl) {
+            statusEl.textContent = `✗ ${msg}`;
+            statusEl.classList.replace('text-gray-400', 'text-red-400');
+          } else {
+            alert(`${verb} failed: ${msg}`);
+          }
+          return;
+        }
+
+        const result = data.result || {};
+        const attempted = Number(result.attempted ?? 1);
+        const succeeded = Number(result.succeeded ?? attempted);
+        const failed = Number(result.failed ?? Math.max(attempted - succeeded, 0));
+        const warning = data.warning || null;
+        const summary = (deviceId === 'all')
+          ? `✓ ${verb} sent to ${succeeded}/${attempted} valve${attempted === 1 ? '' : 's'}`
+          : `✓ ${verb} command sent`;
+
+        if (statusEl) {
+          if (warning) {
+            const warnMsg = warning.message || 'Command sent but valve status not changing';
+            statusEl.textContent = `⚠ ${warnMsg}`;
+            statusEl.classList.replace('text-gray-400', 'text-yellow-300');
+          } else {
+            statusEl.textContent = failed > 0 ? `${summary} (${failed} failed)` : summary;
+            statusEl.classList.replace('text-gray-400', 'text-green-400');
+          }
+        }
+        setTimeout(() => queueDashboardRefresh('valve-action', true), warning ? 1800 : 700);
       } catch (e) {
         if (statusEl) {
           statusEl.textContent = `✗ ${e.message}`;
