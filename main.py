@@ -1139,7 +1139,7 @@ def _resolve_valve_incident(property_id: str,
             or str(row.get("last_state") or "unknown").strip().lower()
             or "unknown"
         ),
-        last_closed_at=row.get("last_closed_at"),
+        last_closed_at=None,
         acked_until_open=False,
         expected_closed=False,
         trigger_sensor_id=None,

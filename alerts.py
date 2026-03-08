@@ -627,7 +627,7 @@ class AlertProcessor:
                     valve_id=valve_id,
                     friendly_name=name,
                     last_state=state,
-                    last_closed_at=last_service_off_at,
+                    last_closed_at=None,
                     acked_until_open=False,
                     expected_closed=False,
                     trigger_sensor_id=None,
