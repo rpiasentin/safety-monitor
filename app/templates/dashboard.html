@@ -25,7 +25,7 @@
     </div>
     <div class="header-status-row">
       <span id="clock" class="monitor-chip monitor-clock font-mono tabular-nums rounded-full">--:--:--</span>
-      <span id="live-refresh-status" class="monitor-chip monitor-status-chip rounded-full">live update every 60s</span>
+      <span id="live-refresh-status" class="monitor-chip monitor-status-chip rounded-full">updated every 60s</span>
     </div>
     <div class="header-nav-row">
       <a href="#summary-section"
@@ -1341,7 +1341,7 @@
       } else if (refreshQueued) {
         queueDashboardRefresh('settings-closed', refreshQueuedFull);
       } else {
-        setRefreshStatus('live update every 60s', 'muted');
+        setRefreshStatus('updated every 60s', 'muted');
       }
     }
 
