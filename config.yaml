@@ -73,7 +73,7 @@ properties:
     water_valve_exclude_ids:
     - "39"
     water_cutoff_service_on_map:
-      "82": on
+      "82": "on"
     indoor_temp_warning: 40.0
     indoor_temp_critical: 32.0
     temperature_cooldown_minutes: 60
