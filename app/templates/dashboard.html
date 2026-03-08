@@ -409,12 +409,48 @@
       <div id="prop-{{ card.id }}" class="bg-gray-900 rounded-2xl border {% if card.alert_count > 0 %}border-red-700{% else %}border-gray-800{% endif %} overflow-hidden monitor-card property-card">
 
         <!-- Card header -->
-        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-800 property-header">
+        <div class="px-5 py-4 border-b border-gray-800 property-header">
           <div class="property-name-wrap">
-            <h2 class="text-lg font-bold text-white">{{ card.name }}</h2>
-            <p class="text-xs text-gray-500 font-mono">{{ card.id }}</p>
+            <div class="property-title-row">
+              <div class="property-title-copy">
+                <h2 class="text-lg font-bold text-white">{{ card.name }}</h2>
+                <p class="text-xs text-gray-500 font-mono">{{ card.id }}</p>
+              </div>
+              {% if card.primary_temp is not none %}
+              {% set ts = card.temp_status %}
+              <a href="/temperatures/{{ card.id }}" class="property-primary-temp-wrap property-primary-temp-link">
+                <span class="property-primary-temp property-primary-temp-{{ ts }}">
+                  {% if ts == 'critical' %}🥶{% else %}🌡{% endif %}
+                  {{ fmt_temp(card.primary_temp) }}
+                </span>
+                {% if ts == 'critical' %}
+                <span class="property-primary-temp-note property-primary-temp-note-critical">Freezing risk</span>
+                {% elif ts == 'warning' %}
+                <span class="property-primary-temp-note property-primary-temp-note-warning">Near threshold</span>
+                {% endif %}
+              </a>
+              {% endif %}
+            </div>
+            <div class="property-meta-row">
+              {% if card.alert_count > 0 %}
+                <span class="property-alert-chip bg-red-600 text-white text-xs px-2 py-0.5 rounded-full font-semibold">
+                  {{ card.alert_count }} alert{{ 's' if card.alert_count != 1 }}
+                </span>
+              {% else %}
+                <span class="property-alert-chip property-alert-chip-clear text-xs px-2 py-0.5 rounded-full font-semibold">
+                  all clear
+                </span>
+              {% endif %}
+              {% if card.reading %}
+                <span class="text-xs text-gray-500">{{ ago(card.reading.get('collected_at')) }}</span>
+                <span class="w-2 h-2 rounded-full bg-green-400"></span>
+              {% else %}
+                <span class="text-xs text-gray-500">no data</span>
+                <span class="w-2 h-2 rounded-full bg-gray-600"></span>
+              {% endif %}
+            </div>
             {% if card.feed_health %}
-            <div class="feed-health-wrap mt-2">
+            <div class="feed-health-wrap">
               {% for feed in card.feed_health %}
               <div class="feed-health-box feed-{{ feed.status }}">
                 <span class="feed-health-label">{{ feed.label }}</span>
@@ -424,7 +460,7 @@
             </div>
             {% endif %}
             {% if card.source_warnings %}
-            <div class="feed-warning-wrap mt-2">
+            <div class="feed-warning-wrap">
               {% for warning in card.source_warnings %}
               <div class="feed-warning-pill">
                 {{ warning.message or "Using recent cached feed values while live data is unavailable." }}
@@ -432,19 +468,35 @@
               {% endfor %}
             </div>
             {% endif %}
-          </div>
-          <div class="flex items-center gap-2">
-            {% if card.alert_count > 0 %}
-              <span class="bg-red-600 text-white text-xs px-2 py-0.5 rounded-full font-semibold">
-                {{ card.alert_count }} alert{{ 's' if card.alert_count != 1 }}
-              </span>
-            {% endif %}
-            {% if card.reading %}
-              <span class="text-xs text-gray-500">{{ ago(card.reading.get('collected_at')) }}</span>
-              <span class="w-2 h-2 rounded-full bg-green-400"></span>
-            {% else %}
-              <span class="text-xs text-gray-500">no data</span>
-              <span class="w-2 h-2 rounded-full bg-gray-600"></span>
+            {% if card.recent_alerts %}
+            {% set visible_property_alerts = card.recent_alerts[:2] %}
+            <div class="property-card-alerts">
+              {% for alert in visible_property_alerts %}
+              <a href="#alert-row-{{ alert.id }}" class="property-card-alert-row property-card-alert-{{ alert.severity }}">
+                <span class="property-card-alert-icon">
+                  {% if alert.alert_type == 'temperature' %}🌡
+                  {% elif alert.alert_type == 'battery' %}🔋
+                  {% elif alert.alert_type == 'offline' %}📡
+                  {% elif alert.alert_type == 'water' %}💧
+                  {% elif alert.alert_type == 'water_shutoff' %}🚰
+                  {% elif alert.alert_type == 'smoke' %}🚨
+                  {% else %}⚠{% endif %}
+                </span>
+                <span class="property-card-alert-copy">
+                  <span class="property-card-alert-message">{{ alert.message }}</span>
+                  <span class="property-card-alert-meta">
+                    {{ ago(alert.triggered_at) }}
+                    {% if alert.pushover_sent %} · pushed{% endif %}
+                  </span>
+                </span>
+              </a>
+              {% endfor %}
+              {% if card.alert_count > visible_property_alerts|length %}
+              <a href="#alerts-wrapper" class="property-card-alert-more">
+                +{{ card.alert_count - (visible_property_alerts|length) }} more in alerts
+              </a>
+              {% endif %}
+            </div>
             {% endif %}
           </div>
         </div>
@@ -587,25 +639,6 @@
               {% endif %}
             </div>
             {% endif %}
-          </div>
-          {% endif %}
-
-          <!-- Temperature -->
-          {% if card.primary_temp is not none %}
-          <div>
-            <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">Temperature</p>
-            <div class="flex items-center gap-3 property-temp-row">
-              {% set ts = card.temp_status %}
-              <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold
-                {% if ts == 'critical' %}bg-red-900 text-red-300
-                {% elif ts == 'warning' %}bg-yellow-900 text-yellow-300
-                {% else %}bg-green-900 text-green-300{% endif %}">
-                {% if ts == 'critical' %}🥶{% elif ts == 'warning' %}🌡{% else %}🌡{% endif %}
-                {{ fmt_temp(card.primary_temp) }}
-              </span>
-              {% if ts == 'critical' %}<span class="text-xs text-red-400 font-semibold">FREEZING RISK</span>
-              {% elif ts == 'warning' %}<span class="text-xs text-yellow-400">Near threshold</span>{% endif %}
-            </div>
           </div>
           {% endif %}
 
@@ -889,11 +922,6 @@
           <a href="/devices/{{ card.id }}"
              class="monitor-link-row property-link-button flex items-center justify-between text-xs text-gray-300 hover:text-blue-300 transition-colors mt-1 pt-2 border-t border-gray-800 group">
             <span>📟 Device activity</span>
-            <span class="group-hover:translate-x-0.5 transition-transform">→</span>
-          </a>
-          <a href="/temperatures/{{ card.id }}"
-             class="property-link-button flex items-center justify-between text-xs text-gray-300 hover:text-blue-300 transition-colors mt-1 group">
-            <span>🌡 All temperatures</span>
             <span class="group-hover:translate-x-0.5 transition-transform">→</span>
           </a>
           {% endif %}
