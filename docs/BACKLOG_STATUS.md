@@ -1,6 +1,6 @@
 # Safety Monitor Backlog Status
 
-Last updated: 2026-03-08 (water incident lifecycle hardening)
+Last updated: 2026-03-08 (local agent tooling hardening)
 
 ## Delivered In This Pass
 
@@ -89,6 +89,17 @@ Last updated: 2026-03-08 (water incident lifecycle hardening)
 - Added cursor support for `GET /api/system/decisions` via `cursor` query param + `X-Next-Cursor` header.
 - Added incident export endpoint:
   - `GET /api/system/decisions/export?format=csv|json`
+
+10. Local agent tooling hardening
+- Added repo-local agent notes:
+  - `AGENTS.md`
+- Added Python version pin for local development:
+  - `.python-version` => `3.11`
+- Updated `tools/preflight_access.sh` to validate:
+  - repo virtualenv exists at `.venv`
+  - local Python runtime is `3.11+`
+  - core imports succeed locally (`fastapi`, `jinja2`, `requests`, `yaml`)
+- Updated README bootstrap instructions so new agents can reproduce the same local setup before touching deploys.
 
 ## Suggested Next Slice
 

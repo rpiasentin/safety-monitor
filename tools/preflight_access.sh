@@ -17,6 +17,20 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+LOCAL_VENV_DIR="$ROOT_DIR/.venv"
+LOCAL_PYTHON=""
+if [[ -x "$LOCAL_VENV_DIR/bin/python3" ]]; then
+  export PATH="$LOCAL_VENV_DIR/bin:$PATH"
+  LOCAL_PYTHON="$LOCAL_VENV_DIR/bin/python3"
+elif [[ -x "$LOCAL_VENV_DIR/bin/python" ]]; then
+  export PATH="$LOCAL_VENV_DIR/bin:$PATH"
+  LOCAL_PYTHON="$LOCAL_VENV_DIR/bin/python"
+elif command -v python3.11 >/dev/null 2>&1; then
+  LOCAL_PYTHON="$(command -v python3.11)"
+elif command -v python3 >/dev/null 2>&1; then
+  LOCAL_PYTHON="$(command -v python3)"
+fi
+
 SM_CT104_HOST="${SM_CT104_HOST:-192.168.2.105}"
 SM_CT104_USER="${SM_CT104_USER:-root}"
 SM_CONTROLLED_PASS="${SM_CONTROLLED_PASS:-0}"
@@ -82,6 +96,34 @@ require_cmd git
 require_cmd ssh
 require_cmd curl
 require_cmd python3
+
+if [[ -x "$LOCAL_VENV_DIR/bin/python3" || -x "$LOCAL_VENV_DIR/bin/python" ]]; then
+  pass "repo virtualenv detected at $LOCAL_VENV_DIR"
+else
+  fail "repo virtualenv missing at $LOCAL_VENV_DIR"
+fi
+
+if [[ -n "$LOCAL_PYTHON" ]] && "$LOCAL_PYTHON" - <<'PY' >/dev/null 2>&1
+import sys
+sys.exit(0 if sys.version_info >= (3, 11) else 1)
+PY
+then
+  pass "local python runtime is >= 3.11 ($("$LOCAL_PYTHON" --version 2>&1))"
+else
+  fail "local python runtime must be >= 3.11 (current: $([[ -n "$LOCAL_PYTHON" ]] && "$LOCAL_PYTHON" --version 2>&1 || echo missing))"
+fi
+
+if [[ -n "$LOCAL_PYTHON" ]] && "$LOCAL_PYTHON" - <<'PY' >/dev/null 2>&1
+import fastapi  # noqa: F401
+import jinja2  # noqa: F401
+import requests  # noqa: F401
+import yaml  # noqa: F401
+PY
+then
+  pass "local python dependencies import cleanly (fastapi, jinja2, requests, yaml)"
+else
+  fail "local python dependencies missing from repo virtualenv"
+fi
 
 section "Repository"
 if [[ -d .git ]]; then
@@ -204,14 +246,22 @@ if (( FAIL_COUNT > 0 )); then
   cat <<'TXT'
 Preflight failed.
 Recommended fixes:
-1) GitHub auth:
+1) Clean the local repo:
+   git -C /Users/rpias/dev/safety-monitor status --short
+   git -C /Users/rpias/dev/safety-monitor add <files> && git -C /Users/rpias/dev/safety-monitor commit -m "..."
+2) Local Python bootstrap:
+   /opt/homebrew/bin/python3.11 -m venv /Users/rpias/dev/safety-monitor/.venv
+   source /Users/rpias/dev/safety-monitor/.venv/bin/activate
+   pip install --upgrade pip
+   pip install -r /Users/rpias/dev/safety-monitor/requirements.txt
+3) GitHub auth:
    gh auth login -h github.com -p https --web
    gh auth setup-git
-2) CT104 key login test:
+4) CT104 key login test:
    ssh -i /Users/rpias/dev/vscode-dev-env/.notes_access/ssh/ct104_root_ed25519 -o IdentitiesOnly=yes root@192.168.2.105
-3) Verify repo remote:
+5) Verify repo remote:
    git remote set-url origin https://github.com/rpiasentin/safety-monitor.git
-4) Normalize runtime config ownership:
+6) Normalize runtime config ownership:
    ssh -i /Users/rpias/dev/vscode-dev-env/.notes_access/ssh/ct104_root_ed25519 -o IdentitiesOnly=yes root@192.168.2.105 \
      'chown safetymon:safetymon /opt/safety-monitor/app/config.yaml'
 TXT

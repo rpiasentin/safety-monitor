@@ -2,6 +2,23 @@
 
 Live Tailscale-accessible dashboard for 4 properties — solar, battery, temperature, and device health.
 
+## Local agent bootstrap
+
+Use the repo-local virtualenv for all local validation work:
+
+```bash
+cd /Users/rpias/dev/safety-monitor
+/opt/homebrew/bin/python3.11 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Notes:
+- `.python-version` is pinned to `3.11` for local tooling.
+- Future agents should prefer `.venv/bin/python` or activate `.venv` before running local checks.
+- `make preflight` now verifies the repo virtualenv exists, the interpreter is Python 3.11+, and core imports (`fastapi`, `jinja2`, `requests`, `yaml`) succeed before continuing.
+
 ## Architecture
 
 ```
@@ -156,10 +173,11 @@ make preflight
 
 What it verifies:
 1. Local repo health (branch, clean tree, correct origin)
-2. GitHub access (`git ls-remote`, `gh auth status` if `gh` is installed)
-3. CT104 SSH access with key auth
-4. CT104 runtime health (`safety-monitor` service + `/api/status`)
-5. CT104 `config.yaml` ownership is `safetymon:safetymon` (or auto-fix when enabled)
+2. Local Python bootstrap (`.venv`, Python 3.11+, required imports)
+3. GitHub access (`git ls-remote`, `gh auth status` if `gh` is installed)
+4. CT104 SSH access with key auth
+5. CT104 runtime health (`safety-monitor` service + `/api/status`)
+6. CT104 `config.yaml` ownership is `safetymon:safetymon` (or auto-fix when enabled)
 
 ## Controlled pass (notification rules + access)
 
