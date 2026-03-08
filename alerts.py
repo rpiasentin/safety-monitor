@@ -4,6 +4,7 @@ Alert processing and Pushover notifications.
 Checks:
   - Battery SOC below threshold (EG4 or Hubitat devices)
   - Water sensors reporting wet/leak state (latched critical until manual clear)
+  - Unexpected shutoff valves closed (latched critical until reopen/ack)
   - Smoke/CO alarm states that remain active beyond sustained threshold
   - Collector offline (no data for > timeout_minutes)
   - Temperature below threshold (°F)
@@ -25,6 +26,7 @@ Pushover env vars:
   PUSHOVER_API_TOKEN
 """
 
+import json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
@@ -177,6 +179,12 @@ class AlertProcessor:
 
         if self.cfg.get("water", {}).get("enabled", True):
             fired += self._check_water_sensors(
+                pid,
+                snapshot,
+                pcfg,
+                suppress_maker_devices=suppress_maker,
+            )
+            fired += self._check_shutoff_valves(
                 pid,
                 snapshot,
                 pcfg,
@@ -413,6 +421,221 @@ class AlertProcessor:
                 "state": "wet",
             })
             logger.error("WATER ALERT [%s] %s: wet", pid, name)
+
+        return fired
+
+    def _recent_wet_sensor_context(self,
+                                   pid: str,
+                                   lookback_minutes: int = 30) -> dict:
+        now = datetime.now(timezone.utc)
+        rows = db.get_system_events(
+            limit=50,
+            property_id=pid,
+            event_type="water_sensor_wet",
+        )
+        recent = []
+        for row in rows:
+            created_at_raw = row.get("created_at")
+            created_at = self._parse_utc(created_at_raw)
+            if not created_at:
+                continue
+            if now - created_at > timedelta(minutes=max(1, int(lookback_minutes))):
+                continue
+
+            details = {}
+            raw_details = row.get("details_json")
+            if raw_details:
+                try:
+                    parsed = json.loads(raw_details)
+                    if isinstance(parsed, dict):
+                        details = parsed
+                except Exception:
+                    details = {}
+
+            sensor_id = str(
+                details.get("sensor_id")
+                or details.get("entity_id")
+                or ""
+            ).strip()
+            friendly_name = str(
+                details.get("friendly_name")
+                or row.get("message")
+                or sensor_id
+            ).strip()
+            recent.append({
+                "sensor_id": sensor_id,
+                "friendly_name": friendly_name,
+                "created_at": created_at_raw,
+            })
+
+        primary = recent[0] if recent else None
+        return {
+            "primary": primary,
+            "recent": recent,
+        }
+
+    def _check_shutoff_valves(self, pid: str, snapshot: dict,
+                              property_cfg: dict,
+                              suppress_maker_devices: bool = False) -> list[dict]:
+        cfg = self.cfg.get("water", {})
+        use_push = property_cfg.get("water_pushover_enabled",
+                                    cfg.get("pushover_enabled", True))
+        correlation_minutes = int(cfg.get("incident_correlation_minutes", 30))
+        maker_ctx = self._maker_context(snapshot)
+        suppressed_maker = self._suppressed_maker_keys(property_cfg)
+        state_map = db.get_shutoff_valve_state_map(pid)
+        fired = []
+        now_ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        for valve in snapshot.get("valve_devices", []):
+            valve_id = str(valve.get("entity_id") or valve.get("friendly_name") or "").strip()
+            if not valve_id:
+                continue
+
+            name = str(valve.get("friendly_name") or valve_id).strip()
+            if self._is_maker_device(valve_id, name, maker_ctx):
+                if suppress_maker_devices or self._is_suppressed_maker(valve_id, name, suppressed_maker):
+                    continue
+
+            state = str(valve.get("state") or "unknown").strip().lower()
+            row = state_map.get(valve_id) or {}
+            last_state = str(row.get("last_state") or "unknown").strip().lower()
+            acked = bool(int(row.get("acked_until_open") or 0))
+            expected_closed = bool(int(row.get("expected_closed") or 0))
+            last_closed_at = row.get("last_closed_at")
+            trigger_sensor_id = str(row.get("trigger_sensor_id") or "").strip() or None
+            trigger_sensor_name = str(row.get("trigger_sensor_name") or "").strip() or None
+
+            if state == "closed":
+                if not last_closed_at:
+                    last_closed_at = now_ts
+
+                recent_ctx = {"primary": None, "recent": []}
+                if not expected_closed and not (trigger_sensor_id or trigger_sensor_name):
+                    recent_ctx = self._recent_wet_sensor_context(pid, correlation_minutes)
+                    primary = recent_ctx.get("primary") or {}
+                    trigger_sensor_id = primary.get("sensor_id") or None
+                    trigger_sensor_name = primary.get("friendly_name") or None
+
+                active = db.find_active_alert(pid, "water_shutoff", sensor_id=valve_id)
+                if not active and not acked and not expected_closed:
+                    trigger_note = (
+                        f" after {trigger_sensor_name} reported WET"
+                        if trigger_sensor_name else ""
+                    )
+                    msg = (
+                        f"🚰 SHUTOFF CLOSED at {snapshot.get('property_name', pid)}: "
+                        f"{name} is CLOSED{trigger_note}"
+                    )
+                    alert_id = db.insert_alert(
+                        pid,
+                        "water_shutoff",
+                        msg,
+                        sensor_id=valve_id,
+                        value=1.0,
+                        threshold=1.0,
+                        severity="critical",
+                    )
+                    pushed = False
+                    if use_push:
+                        pushed = _send_pushover(
+                            f"Safety Monitor — {snapshot.get('property_name', pid)}",
+                            msg,
+                            priority=1,
+                        )
+                        if pushed:
+                            db.mark_alert_pushover_sent(alert_id)
+
+                    db.insert_system_event(
+                        event_type="water_incident_opened",
+                        level="warning",
+                        property_id=pid,
+                        actor="alert",
+                        message=f"Water incident opened: {name} shutoff closed",
+                        details={
+                            "alert_id": alert_id,
+                            "device_id": valve_id,
+                            "valve_id": valve_id,
+                            "friendly_name": name,
+                            "trigger_sensor_id": trigger_sensor_id,
+                            "trigger_sensor_name": trigger_sensor_name,
+                            "correlated_water_sensors": recent_ctx.get("recent") or [],
+                            "pushed": bool(pushed),
+                        },
+                    )
+                    fired.append({
+                        "type": "water_shutoff",
+                        "sensor": valve_id,
+                        "severity": "critical",
+                        "state": "closed",
+                    })
+                    logger.error("WATER SHUTOFF ALERT [%s] %s: closed", pid, name)
+
+                db.upsert_shutoff_valve_state(
+                    property_id=pid,
+                    valve_id=valve_id,
+                    friendly_name=name,
+                    last_state="closed",
+                    last_closed_at=last_closed_at,
+                    acked_until_open=acked,
+                    expected_closed=expected_closed,
+                    trigger_sensor_id=None if expected_closed else trigger_sensor_id,
+                    trigger_sensor_name=None if expected_closed else trigger_sensor_name,
+                )
+                continue
+
+            if state == "open":
+                resolved = db.resolve_alerts_for_sensor(pid, "water_shutoff", valve_id)
+                had_incident = bool(
+                    resolved
+                    or acked
+                    or (last_state == "closed" and not expected_closed)
+                    or trigger_sensor_id
+                    or trigger_sensor_name
+                )
+                if had_incident:
+                    db.insert_system_event(
+                        event_type="water_incident_resolved",
+                        level="info",
+                        property_id=pid,
+                        actor="alert",
+                        message=f"Water incident resolved: {name} reopened",
+                        details={
+                            "device_id": valve_id,
+                            "valve_id": valve_id,
+                            "friendly_name": name,
+                            "resolved_alerts": int(resolved),
+                            "trigger_sensor_id": trigger_sensor_id,
+                            "trigger_sensor_name": trigger_sensor_name,
+                            "acknowledged": bool(acked),
+                            "resolution": "reopened",
+                        },
+                    )
+
+                db.upsert_shutoff_valve_state(
+                    property_id=pid,
+                    valve_id=valve_id,
+                    friendly_name=name,
+                    last_state="open",
+                    last_closed_at=last_closed_at,
+                    acked_until_open=False,
+                    expected_closed=False,
+                    trigger_sensor_id=None,
+                    trigger_sensor_name=None,
+                )
+                continue
+
+            db.upsert_shutoff_valve_state(
+                property_id=pid,
+                valve_id=valve_id,
+                friendly_name=name,
+                last_state=state or "unknown",
+                last_closed_at=last_closed_at,
+                acked_until_open=acked,
+                expected_closed=expected_closed,
+                trigger_sensor_id=trigger_sensor_id,
+                trigger_sensor_name=trigger_sensor_name,
+            )
 
         return fired
 

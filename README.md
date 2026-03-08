@@ -9,7 +9,7 @@ main.py            FastAPI web app (uvicorn, port 8000)
 scheduler.py       APScheduler — polls all sources every 15 min
 aggregator.py      Per-property collector runner + merger
 db.py              SQLite store (data/safety_monitor.db)
-alerts.py          Pushover alerts: low SOC, low temp, offline
+alerts.py          Pushover alerts: temp, battery, water, shutoff, smoke, offline
 formatters.py      Display helpers
 
 collectors/
@@ -104,6 +104,10 @@ Completed:
 - Feed freshness boxes for Hubitat, Home Assistant, EG4, and Victron on each property
 - Property lock status panel with lock/unlock controls (`all` + per-lock actions)
 - Property smoke/CO status panel for each location card
+- Water leak + shutoff incident hardening:
+  - shutoff closures create active `water_shutoff` incidents
+  - incidents stay active until valve reopen or acknowledgement
+  - decision log now ties together wet trigger, shutoff closure, acknowledgement, and reopen
 - Sustained smoke/CO alert escalation with per-sensor acknowledge/mute/unmute controls
 - Hubitat device auto-pruning when devices are removed upstream
 - Dedicated critical decision log page at `/decisions`
@@ -118,6 +122,7 @@ Operational details:
 - Shutoff valve control endpoints:
   - `POST /api/property/{property_id}/valves/all/{open|close}`
   - `POST /api/property/{property_id}/valves/{device_id}/{open|close}`
+  - `POST /api/property/{property_id}/valves/{device_id}/ack`
 - Smoke control endpoints:
   - `POST /api/property/{property_id}/smoke/{sensor_id}/ack`
   - `POST /api/property/{property_id}/smoke/{sensor_id}/mute/{minutes}`

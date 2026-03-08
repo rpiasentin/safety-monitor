@@ -1,6 +1,6 @@
 # Safety Monitor Backlog Status
 
-Last updated: 2026-03-07 (water/valve incident hardening)
+Last updated: 2026-03-08 (water incident lifecycle hardening)
 
 ## Delivered In This Pass
 
@@ -18,12 +18,22 @@ Last updated: 2026-03-07 (water/valve incident hardening)
   - `water_shutoff_closed`
   - `water_shutoff_opened`
 - Fixed valve misclassification so devices like the Lariat main shutoff no longer appear as leak sensors.
+- Added persistent shutoff-valve incident lifecycle state:
+  - active `water_shutoff` alerts on unexpected closed valves
+  - acknowledgement until valve reopen
+  - auto-resolve on valve reopen
+- Added incident timeline events:
+  - `water_incident_opened`
+  - `water_incident_acknowledged`
+  - `water_incident_resolved`
+- Added dashboard acknowledgement action for active shutoff incidents.
 
 1. Notification/deploy hardening
 - Added deterministic alert-rule regression matrix script:
   - `tools/notification_rules_matrix.py`
   - Covers push toggles for temperature, battery, water, smoke, offline
   - Covers maker-device suppression (global + per-device)
+  - Covers shutoff-valve push toggle, acknowledgement latch, expected-close suppression, and reopen resolution
 - Added controlled preflight mode:
   - `make controlled-pass` (sets `SM_CONTROLLED_PASS=1` + ownership auto-fix)
 - Added CT104 post-deploy ownership/runtime guard:

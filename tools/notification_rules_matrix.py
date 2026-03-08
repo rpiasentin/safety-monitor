@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import os
 import sys
 import types
@@ -64,8 +65,11 @@ if "db" not in sys.modules:
         "mark_alert_pushover_sent",
         "find_active_alert",
         "get_latest_reading",
+        "get_system_events",
         "get_smoke_sensor_state_map",
+        "get_shutoff_valve_state_map",
         "upsert_smoke_sensor_state",
+        "upsert_shutoff_valve_state",
         "resolve_alerts_for_sensor",
         "insert_system_event",
     ):
@@ -92,6 +96,7 @@ class FakeDB:
         self.latest_reading = {}
         self.active_alert = {}
         self.smoke_state = {}
+        self.valve_state = {}
         self.system_events = []
 
     def get_last_alert_time(self, property_id, alert_type, sensor_id):
@@ -138,8 +143,22 @@ class FakeDB:
     def get_latest_reading(self, property_id):
         return self.latest_reading.get(property_id)
 
+    def get_system_events(self, limit=200, level=None, property_id=None, event_type=None):
+        rows = list(self.system_events)
+        if level:
+            rows = [r for r in rows if str(r.get("level") or "").lower() == str(level).lower()]
+        if property_id:
+            rows = [r for r in rows if r.get("property_id") == property_id]
+        if event_type:
+            rows = [r for r in rows if str(r.get("event_type") or "").lower() == str(event_type).lower()]
+        rows.reverse()
+        return rows[:limit]
+
     def get_smoke_sensor_state_map(self, property_id):
         return self.smoke_state.get(property_id, {})
+
+    def get_shutoff_valve_state_map(self, property_id):
+        return self.valve_state.get(property_id, {})
 
     def upsert_smoke_sensor_state(self, property_id, sensor_id, friendly_name,
                                   last_state, first_alarm_at, last_alarm_at,
@@ -154,6 +173,21 @@ class FakeDB:
             "muted_until": muted_until,
         }
 
+    def upsert_shutoff_valve_state(self, property_id, valve_id, friendly_name,
+                                   last_state, last_closed_at, acked_until_open,
+                                   expected_closed, trigger_sensor_id,
+                                   trigger_sensor_name):
+        state = self.valve_state.setdefault(property_id, {})
+        state[valve_id] = {
+            "friendly_name": friendly_name,
+            "last_state": last_state,
+            "last_closed_at": last_closed_at,
+            "acked_until_open": int(bool(acked_until_open)),
+            "expected_closed": int(bool(expected_closed)),
+            "trigger_sensor_id": trigger_sensor_id,
+            "trigger_sensor_name": trigger_sensor_name,
+        }
+
     def resolve_alerts_for_sensor(self, property_id, alert_type, sensor_id):
         key = (property_id, alert_type, sensor_id)
         if key in self.active_alert:
@@ -162,7 +196,12 @@ class FakeDB:
         return 0
 
     def insert_system_event(self, **kwargs):
-        self.system_events.append(kwargs)
+        row = dict(kwargs)
+        row.setdefault("created_at", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))
+        details = row.pop("details", None)
+        if details is not None and "details_json" not in row:
+            row["details_json"] = json.dumps(details, sort_keys=True)
+        self.system_events.append(row)
 
 
 class FakePush:
@@ -192,8 +231,11 @@ class AlertHarness:
             "mark_alert_pushover_sent": self.db.mark_alert_pushover_sent,
             "find_active_alert": self.db.find_active_alert,
             "get_latest_reading": self.db.get_latest_reading,
+            "get_system_events": self.db.get_system_events,
             "get_smoke_sensor_state_map": self.db.get_smoke_sensor_state_map,
+            "get_shutoff_valve_state_map": self.db.get_shutoff_valve_state_map,
             "upsert_smoke_sensor_state": self.db.upsert_smoke_sensor_state,
+            "upsert_shutoff_valve_state": self.db.upsert_shutoff_valve_state,
             "resolve_alerts_for_sensor": self.db.resolve_alerts_for_sensor,
             "insert_system_event": self.db.insert_system_event,
         }
@@ -254,6 +296,7 @@ def _base_snapshot():
         "all_temps": {},
         "battery_devices": [],
         "water_sensors": [],
+        "valve_devices": [],
         "smoke_devices": [],
         "maker_devices": [],
         "maker_temperature_names": [],
@@ -347,6 +390,147 @@ def case_water_push_toggle():
         assert len(harness.db.alerts) == 1
         assert harness.db.alerts[0]["pushover_sent"] == 0
         assert len(harness.push.calls) == 0
+    finally:
+        harness.restore()
+
+
+def case_water_shutoff_push_toggle():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "93",
+            "friendly_name": "Main shutoff",
+            "state": "closed",
+        }]
+        prop_cfg = {
+            "water_pushover_enabled": False,
+        }
+        fired = proc.process(snap, prop_cfg)
+        assert len(fired) == 1 and fired[0]["type"] == "water_shutoff"
+        assert len(harness.db.alerts) == 1
+        assert harness.db.alerts[0]["alert_type"] == "water_shutoff"
+        assert harness.db.alerts[0]["pushover_sent"] == 0
+        assert len(harness.push.calls) == 0
+    finally:
+        harness.restore()
+
+
+def case_water_shutoff_ack_suppresses_realert():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "93",
+            "friendly_name": "Main shutoff",
+            "state": "closed",
+        }]
+        harness.db.valve_state["fm"] = {
+            "93": {
+                "friendly_name": "Main shutoff",
+                "last_state": "closed",
+                "last_closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "acked_until_open": 1,
+                "expected_closed": 0,
+                "trigger_sensor_id": "88",
+                "trigger_sensor_name": "Laundry room water sensor",
+            }
+        }
+        fired = proc.process(snap, {})
+        assert len(fired) == 0
+        assert len(harness.db.alerts) == 0
+        assert len(harness.push.calls) == 0
+    finally:
+        harness.restore()
+
+
+def case_water_shutoff_expected_close_suppressed():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "93",
+            "friendly_name": "Main shutoff",
+            "state": "closed",
+        }]
+        harness.db.valve_state["fm"] = {
+            "93": {
+                "friendly_name": "Main shutoff",
+                "last_state": "closed",
+                "last_closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "acked_until_open": 0,
+                "expected_closed": 1,
+                "trigger_sensor_id": None,
+                "trigger_sensor_name": None,
+            }
+        }
+        fired = proc.process(snap, {})
+        assert len(fired) == 0
+        assert len(harness.db.alerts) == 0
+    finally:
+        harness.restore()
+
+
+def case_water_shutoff_reopen_resolves():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "93",
+            "friendly_name": "Main shutoff",
+            "state": "open",
+        }]
+        harness.db.valve_state["fm"] = {
+            "93": {
+                "friendly_name": "Main shutoff",
+                "last_state": "closed",
+                "last_closed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                "acked_until_open": 0,
+                "expected_closed": 0,
+                "trigger_sensor_id": "88",
+                "trigger_sensor_name": "Laundry room water sensor",
+            }
+        }
+        harness.db.active_alert[("fm", "water_shutoff", "93")] = 99
+        fired = proc.process(snap, {})
+        assert len(fired) == 0
+        assert ("fm", "water_shutoff", "93") not in harness.db.active_alert
+        assert any(
+            str(ev.get("event_type") or "") == "water_incident_resolved"
+            for ev in harness.db.system_events
+        )
     finally:
         harness.restore()
 
@@ -509,6 +693,10 @@ CASES = [
     ("temperature push toggle honored", case_temperature_push_toggle),
     ("battery push toggle honored", case_battery_push_toggle),
     ("water push toggle honored", case_water_push_toggle),
+    ("water shutoff push toggle honored", case_water_shutoff_push_toggle),
+    ("water shutoff ack suppresses re-alert", case_water_shutoff_ack_suppresses_realert),
+    ("water shutoff expected close suppressed", case_water_shutoff_expected_close_suppressed),
+    ("water shutoff reopen resolves", case_water_shutoff_reopen_resolves),
     ("offline push toggle honored", case_offline_push_toggle),
     ("smoke push toggle honored", case_smoke_push_toggle),
     ("maker global suppression honored", case_maker_global_suppression),

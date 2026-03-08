@@ -3,11 +3,12 @@ SQLite data access layer.
 All reads/writes go through this module.
 
 Schema:
-  readings        — one row per collection run per source per property
-  hubitat_devices — latest battery level per device per property
-  smoke_sensor_state — per-sensor smoke alarm lifecycle + mute/ack state
-  system_events   — critical system decisions and operator actions
-  alerts          — triggered alert history with cooldown tracking
+  readings             — one row per collection run per source per property
+  hubitat_devices      — latest battery level per device per property
+  smoke_sensor_state   — per-sensor smoke alarm lifecycle + mute/ack state
+  shutoff_valve_state  — per-valve shutoff incident lifecycle + ack state
+  system_events        — critical system decisions and operator actions
+  alerts               — triggered alert history with cooldown tracking
 """
 
 import json
@@ -76,6 +77,20 @@ CREATE TABLE IF NOT EXISTS smoke_sensor_state (
     PRIMARY KEY(property_id, sensor_id)
 );
 
+CREATE TABLE IF NOT EXISTS shutoff_valve_state (
+    property_id         TEXT    NOT NULL,
+    valve_id            TEXT    NOT NULL,
+    friendly_name       TEXT,
+    last_state          TEXT    NOT NULL,
+    last_closed_at      TEXT,
+    acked_until_open    INTEGER DEFAULT 0,
+    expected_closed     INTEGER DEFAULT 0,
+    trigger_sensor_id   TEXT,
+    trigger_sensor_name TEXT,
+    updated_at          TEXT    NOT NULL,
+    PRIMARY KEY(property_id, valve_id)
+);
+
 CREATE TABLE IF NOT EXISTS alerts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     property_id     TEXT    NOT NULL,
@@ -96,6 +111,8 @@ CREATE INDEX IF NOT EXISTS idx_alerts_property_time
     ON alerts(property_id, triggered_at DESC);
 CREATE INDEX IF NOT EXISTS idx_smoke_state_updated
     ON smoke_sensor_state(property_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_valve_state_updated
+    ON shutoff_valve_state(property_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS system_events (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -505,6 +522,123 @@ def set_smoke_sensor_mute(property_id: str,
         ))
 
 
+# ── Shutoff valve state ────────────────────────────────────────────────────────
+
+def get_shutoff_valve_state(property_id: str,
+                            valve_id: str,
+                            path: str = DB_PATH) -> dict | None:
+    with get_conn(path) as conn:
+        row = conn.execute("""
+            SELECT * FROM shutoff_valve_state
+            WHERE property_id=? AND valve_id=?
+            LIMIT 1
+        """, (property_id, valve_id)).fetchone()
+    return dict(row) if row else None
+
+
+def get_shutoff_valve_states(property_id: str,
+                             path: str = DB_PATH) -> list[dict]:
+    with get_conn(path) as conn:
+        rows = conn.execute("""
+            SELECT * FROM shutoff_valve_state
+            WHERE property_id=?
+            ORDER BY updated_at DESC, valve_id ASC
+        """, (property_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_shutoff_valve_state_map(property_id: str,
+                                path: str = DB_PATH) -> dict[str, dict]:
+    rows = get_shutoff_valve_states(property_id, path=path)
+    out: dict[str, dict] = {}
+    for row in rows:
+        valve_id = str(row.get("valve_id") or "").strip()
+        if valve_id:
+            out[valve_id] = row
+    return out
+
+
+def upsert_shutoff_valve_state(property_id: str,
+                               valve_id: str,
+                               friendly_name: str = "",
+                               last_state: str = "unknown",
+                               last_closed_at: str | None = None,
+                               acked_until_open: bool = False,
+                               expected_closed: bool = False,
+                               trigger_sensor_id: str | None = None,
+                               trigger_sensor_name: str | None = None,
+                               path: str = DB_PATH) -> None:
+    now = _now()
+    with get_conn(path) as conn:
+        conn.execute("""
+            INSERT INTO shutoff_valve_state
+              (property_id, valve_id, friendly_name, last_state, last_closed_at,
+               acked_until_open, expected_closed, trigger_sensor_id,
+               trigger_sensor_name, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(property_id, valve_id) DO UPDATE SET
+              friendly_name=excluded.friendly_name,
+              last_state=excluded.last_state,
+              last_closed_at=excluded.last_closed_at,
+              acked_until_open=excluded.acked_until_open,
+              expected_closed=excluded.expected_closed,
+              trigger_sensor_id=excluded.trigger_sensor_id,
+              trigger_sensor_name=excluded.trigger_sensor_name,
+              updated_at=excluded.updated_at
+        """, (
+            property_id,
+            valve_id,
+            friendly_name or valve_id,
+            str(last_state or "unknown").strip().lower(),
+            last_closed_at,
+            1 if acked_until_open else 0,
+            1 if expected_closed else 0,
+            trigger_sensor_id,
+            trigger_sensor_name,
+            now,
+        ))
+
+
+def set_shutoff_valve_ack(property_id: str,
+                          valve_id: str,
+                          acked_until_open: bool = True,
+                          friendly_name: str = "",
+                          path: str = DB_PATH) -> None:
+    row = get_shutoff_valve_state(property_id, valve_id, path=path) or {}
+    upsert_shutoff_valve_state(
+        property_id=property_id,
+        valve_id=valve_id,
+        friendly_name=friendly_name or row.get("friendly_name") or valve_id,
+        last_state=row.get("last_state") or "unknown",
+        last_closed_at=row.get("last_closed_at"),
+        acked_until_open=acked_until_open,
+        expected_closed=bool(int(row.get("expected_closed") or 0)),
+        trigger_sensor_id=row.get("trigger_sensor_id"),
+        trigger_sensor_name=row.get("trigger_sensor_name"),
+        path=path,
+    )
+
+
+def set_shutoff_valve_expected_closed(property_id: str,
+                                      valve_id: str,
+                                      expected_closed: bool = True,
+                                      friendly_name: str = "",
+                                      path: str = DB_PATH) -> None:
+    row = get_shutoff_valve_state(property_id, valve_id, path=path) or {}
+    upsert_shutoff_valve_state(
+        property_id=property_id,
+        valve_id=valve_id,
+        friendly_name=friendly_name or row.get("friendly_name") or valve_id,
+        last_state=row.get("last_state") or "unknown",
+        last_closed_at=row.get("last_closed_at"),
+        acked_until_open=bool(int(row.get("acked_until_open") or 0)),
+        expected_closed=expected_closed,
+        trigger_sensor_id=row.get("trigger_sensor_id"),
+        trigger_sensor_name=row.get("trigger_sensor_name"),
+        path=path,
+    )
+
+
 # ── Alerts ────────────────────────────────────────────────────────────────────
 
 def insert_alert(property_id: str, alert_type: str, message: str,
@@ -580,21 +714,21 @@ def get_dashboard_alerts(hours: int = 24,
                          path: str = DB_PATH) -> list[dict]:
     """
     Alerts shown on the dashboard:
-      1) all unresolved water + smoke alerts (latched until clear/ack)
-      2) recent non-water/non-smoke alerts in the time window, collapsed so repeated
+      1) all unresolved water + shutoff + smoke alerts (latched until clear/ack)
+      2) recent non-water/non-shutoff/non-smoke alerts in the time window, collapsed so repeated
          triggers for the same property/type/sensor appear as one row with
          repeat_count.
     """
     with get_conn(path) as conn:
         latched_rows = conn.execute("""
             SELECT * FROM alerts
-            WHERE alert_type IN ('water', 'smoke')
+            WHERE alert_type IN ('water', 'water_shutoff', 'smoke')
               AND resolved_at IS NULL
             ORDER BY id DESC
         """).fetchall()
         recent_rows = conn.execute("""
             SELECT * FROM alerts
-            WHERE alert_type NOT IN ('water', 'smoke')
+            WHERE alert_type NOT IN ('water', 'water_shutoff', 'smoke')
               AND resolved_at IS NULL
               AND triggered_at >= datetime('now', ?)
             ORDER BY id DESC
