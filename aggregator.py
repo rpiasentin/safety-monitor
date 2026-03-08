@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import db
+import water_service
 from collectors.eg4 import EG4Client
 from collectors.ha_api import HACollector
 from collectors.hubitat import HubitatCloudCollector
@@ -69,6 +70,7 @@ class PropertyCollector:
     """Manages all collectors for a single property and merges their output."""
 
     def __init__(self, prop_cfg: dict):
+        self.prop_cfg  = prop_cfg
         self.prop_id   = prop_cfg["id"]
         self.prop_name = prop_cfg.get("name", self.prop_id)
         self.enabled   = prop_cfg.get("enabled", True)
@@ -207,38 +209,53 @@ class PropertyCollector:
                     },
                 )
 
-        prev_valves = _device_index(prev_raw.get("valve_devices") or [])
-        cur_valves = _device_index(snapshot.get("valve_devices") or [])
+        property_alert_cfg = self.prop_cfg.get("alerts", {}) if isinstance(self.prop_cfg, dict) else {}
+        prev_valves = _device_index(prev_raw.get("water_cutoff_devices") or prev_raw.get("valve_devices") or [])
+        cur_valves = _device_index(snapshot.get("water_cutoff_devices") or snapshot.get("valve_devices") or [])
         for device_id, cur_row in cur_valves.items():
             cur_state = str(cur_row.get("state") or "").strip().lower()
             prev_state = str((prev_valves.get(device_id) or {}).get("state") or "").strip().lower()
-            if cur_state == "closed" and prev_state != "closed":
+            cur_service_state = water_service.valve_service_state(
+                cur_state,
+                property_alert_cfg,
+                device_id,
+            ).get("service_state")
+            prev_service_state = water_service.valve_service_state(
+                prev_state,
+                property_alert_cfg,
+                device_id,
+            ).get("service_state")
+            if cur_service_state == "off" and prev_service_state != "off":
                 db.insert_system_event(
                     event_type="water_shutoff_closed",
                     level="warning",
                     property_id=self.prop_id,
                     actor="collector",
-                    message=f"Shutoff valve closed: {cur_row.get('friendly_name') or device_id}",
+                    message=f"Water cutoff turned water off: {cur_row.get('friendly_name') or device_id}",
                     details={
                         "device_id": device_id,
                         "friendly_name": cur_row.get("friendly_name") or device_id,
                         "previous_state": prev_state or "unknown",
                         "current_state": cur_state,
+                        "previous_service_state": prev_service_state or "unknown",
+                        "current_service_state": cur_service_state,
                         "last_activity": cur_row.get("last_activity"),
                     },
                 )
-            elif prev_state == "closed" and cur_state == "open":
+            elif prev_service_state == "off" and cur_service_state == "on":
                 db.insert_system_event(
                     event_type="water_shutoff_opened",
                     level="info",
                     property_id=self.prop_id,
                     actor="collector",
-                    message=f"Shutoff valve opened: {cur_row.get('friendly_name') or device_id}",
+                    message=f"Water cutoff restored water on: {cur_row.get('friendly_name') or device_id}",
                     details={
                         "device_id": device_id,
                         "friendly_name": cur_row.get("friendly_name") or device_id,
                         "previous_state": prev_state,
                         "current_state": cur_state,
+                        "previous_service_state": prev_service_state,
+                        "current_service_state": cur_service_state,
                         "last_activity": cur_row.get("last_activity"),
                     },
                 )
@@ -423,7 +440,8 @@ def _rollup(sources: dict) -> dict:
     # Water/leak sensors (latched critical alert uses these states)
     out["water_sensors"] = (ha.get("water_sensors") or []) + \
                              (hub.get("water_sensors") or [])
-    out["valve_devices"] = list(hub.get("valve_devices") or [])
+    out["valve_devices"] = list(hub.get("water_cutoff_devices") or hub.get("valve_devices") or [])
+    out["water_cutoff_devices"] = list(hub.get("water_cutoff_devices") or hub.get("valve_devices") or [])
 
     # Property security/safety rollups (currently from Hubitat cloud feeds)
     out["lock_devices"] = list(hub.get("lock_devices") or [])

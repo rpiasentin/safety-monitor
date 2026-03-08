@@ -844,7 +844,7 @@
             {% if card.water_cutoff_notice and not card.valve_devices %}
             <div class="property-safety-panel">
               <div class="property-safety-head">
-                <span class="property-safety-title">Water Cutoff</span>
+                <span class="property-safety-title">Water Cutoffs</span>
                 <span class="property-safety-meta">control unavailable</span>
               </div>
               <div class="property-safety-note">
@@ -856,7 +856,7 @@
             {% if card.valve_devices %}
             <div class="property-safety-panel">
               <div class="property-safety-head">
-                <span class="property-safety-title">Shutoff Valves</span>
+                <span class="property-safety-title">Water Cutoffs</span>
                 <span class="property-safety-meta">
                   {{ card.valve_counts.on }} water on · {{ card.valve_counts.off }} water off
                 </span>

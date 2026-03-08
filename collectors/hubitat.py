@@ -68,7 +68,7 @@ class HubitatCloudClient:
     def command_device(self, device_id: str, command: str) -> dict:
         """Invoke a Maker API command for a single device."""
         cmd = str(command or "").strip().lower()
-        if cmd not in {"lock", "unlock", "open", "close"}:
+        if cmd not in {"lock", "unlock", "open", "close", "on", "off"}:
             raise ValueError(f"Unsupported Hubitat command: {command}")
         url = f"{self._command_base()}/devices/{device_id}/{cmd}"
         resp = requests.get(
@@ -397,6 +397,29 @@ class HubitatCloudClient:
             return s
         return s
 
+    @staticmethod
+    def _normalize_cutoff_state(raw_state) -> str:
+        if raw_state is None:
+            return "unknown"
+        s = str(raw_state).strip().lower()
+        if s in {"open", "opened"}:
+            return "open"
+        if s in {"closed", "close"}:
+            return "closed"
+        if s in {"opening"}:
+            return "opening"
+        if s in {"closing"}:
+            return "closing"
+        if s in {"on", "off"}:
+            return s
+        if s in {"turning on", "turning_on", "switching_on"}:
+            return "turning_on"
+        if s in {"turning off", "turning_off", "switching_off"}:
+            return "turning_off"
+        if s in {"unknown", "unavailable"}:
+            return s
+        return s
+
     def get_valve_devices(self, devices: list[dict] | None = None) -> list[dict]:
         """Return shutoff valve state + command capability for all valve devices."""
         if devices is None:
@@ -419,6 +442,9 @@ class HubitatCloudClient:
                 "friendly_name": d.get("label") or d.get("name") or f"Device {d.get('id')}",
                 "device_type": d.get("type", ""),
                 "state": state,
+                "raw_state": state,
+                "actuator_type": "valve",
+                "state_attribute": "valve",
                 "water_state": self._normalize_water_state(self._attr_value(attrs, "water")),
                 "can_open": bool(can_open),
                 "can_close": bool(can_close),
@@ -433,6 +459,95 @@ class HubitatCloudClient:
             })
 
         return out
+
+    def get_water_cutoff_devices(self,
+                                 devices: list[dict] | None = None,
+                                 configured_devices: list[dict] | None = None) -> list[dict]:
+        """
+        Return all water cutoff actuators exposed to Safety Monitor.
+
+        Default valve-style actuators are auto-detected. Additional relay-backed
+        cutoffs can be explicitly configured via the collector config.
+        """
+        if devices is None:
+            devices = self.get_all_devices()
+
+        out_by_id: dict[str, dict] = {}
+        for row in self.get_valve_devices(devices):
+            did = str(row.get("entity_id") or "").strip()
+            if did:
+                out_by_id[did] = row
+
+        device_by_id = {
+            str(d.get("id")): d
+            for d in devices
+            if str(d.get("id") or "").strip()
+        }
+
+        for cfg in (configured_devices or []):
+            if not isinstance(cfg, dict):
+                continue
+            did = str(
+                cfg.get("device_id")
+                or cfg.get("entity_id")
+                or cfg.get("id")
+                or ""
+            ).strip()
+            if not did:
+                continue
+
+            device = device_by_id.get(did)
+            if not device:
+                continue
+
+            attrs = device.get("attributes", {})
+            actuator_type = str(
+                cfg.get("actuator_type")
+                or cfg.get("type")
+                or ("relay" if str(cfg.get("state_attribute") or "").strip().lower() == "switch" else "valve")
+            ).strip().lower()
+            state_attr = str(
+                cfg.get("state_attribute")
+                or ("switch" if actuator_type in {"relay", "switch"} else "valve")
+            ).strip().lower()
+            raw_state = self._attr_value(attrs, state_attr)
+            if raw_state is None and state_attr != "switch":
+                raw_state = self._attr_value(attrs, "switch")
+            if raw_state is None and state_attr != "valve":
+                raw_state = self._attr_value(attrs, "valve")
+            if raw_state is None:
+                continue
+
+            commands = self._command_names(device)
+            state = self._normalize_cutoff_state(raw_state)
+            can_open = ("open" in commands) or state in {"closed", "closing"}
+            can_close = ("close" in commands) or state in {"open", "opening"}
+
+            out_by_id[did] = {
+                "entity_id": did,
+                "friendly_name": device.get("label") or device.get("name") or f"Device {did}",
+                "device_type": device.get("type", ""),
+                "state": state,
+                "raw_state": str(raw_state).strip().lower(),
+                "actuator_type": actuator_type,
+                "state_attribute": state_attr,
+                "water_state": self._normalize_water_state(self._attr_value(attrs, "water")),
+                "can_open": bool(can_open),
+                "can_close": bool(can_close),
+                "last_activity": self._normalize_ts(
+                    device.get("lastActivity")
+                    or device.get("last_activity")
+                    or device.get("date")
+                    or self._attr_value(attrs, "lastActivity")
+                    or self._attr_value(attrs, "last_activity")
+                    or self._attr_value(attrs, "date")
+                ),
+            }
+
+        return sorted(
+            out_by_id.values(),
+            key=lambda row: str(row.get("friendly_name") or row.get("entity_id") or "").lower(),
+        )
 
     @staticmethod
     def _normalize_water_state(raw_state) -> str | None:
@@ -579,6 +694,7 @@ class HubitatCloudCollector(BaseCollector):
         )
         self.client      = HubitatCloudClient(cfg["endpoint"], api_token=token)
         self.temp_sensor = cfg.get("primary_temp_sensor")
+        self.water_cutoff_devices = list(cfg.get("water_cutoff_devices") or [])
 
     def collect(self) -> dict | None:
         try:
@@ -590,7 +706,7 @@ class HubitatCloudCollector(BaseCollector):
         batts      = self.client.get_battery_devices(devices)
         all_devs   = self.client.get_all_devices_with_activity(devices)
         locks      = self.client.get_lock_devices(devices)
-        valves     = self.client.get_valve_devices(devices)
+        valves     = self.client.get_water_cutoff_devices(devices, self.water_cutoff_devices)
         smokes     = self.client.get_smoke_sensors(devices)
         waters     = self.client.get_water_sensors(devices)
 
@@ -606,6 +722,7 @@ class HubitatCloudCollector(BaseCollector):
             "battery_devices": batts,
             "lock_devices":    locks,
             "valve_devices":   valves,
+            "water_cutoff_devices": valves,
             "smoke_devices":   smokes,
             "water_sensors":   waters,
             # Full device list with lastActivity — used for device activity view

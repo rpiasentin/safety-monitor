@@ -424,7 +424,7 @@ def _maker_device_roles(property_id: str) -> tuple[dict[str, set[str]], dict[str
     _add("water", list(payload.get("water_sensors") or []))
     _add("smoke", list(payload.get("smoke_devices") or []))
     _add("lock", list(payload.get("lock_devices") or []))
-    _add("valve", list(payload.get("valve_devices") or []))
+    _add("valve", list(payload.get("water_cutoff_devices") or payload.get("valve_devices") or []))
     return roles_by_id, roles_by_name
 
 
@@ -435,14 +435,18 @@ def _get_property_cfg(property_id: str) -> dict | None:
     )
 
 
-def _hubitat_client_for_property(property_id: str) -> HubitatCloudClient | None:
+def _hubitat_collector_cfg(property_id: str) -> dict | None:
     prop = _get_property_cfg(property_id)
     if not prop:
         return None
-    coll_cfg = next(
+    return next(
         (c for c in prop.get("collectors", []) if c.get("type") == "hubitat_cloud"),
         None,
     )
+
+
+def _hubitat_client_for_property(property_id: str) -> HubitatCloudClient | None:
+    coll_cfg = _hubitat_collector_cfg(property_id)
     if not coll_cfg or not coll_cfg.get("endpoint"):
         return None
 
@@ -487,7 +491,14 @@ def _expected_lock_state(action: str) -> str:
 
 
 def _expected_valve_state(action: str) -> str:
-    return "open" if str(action or "").strip().lower() == "open" else "closed"
+    cmd = str(action or "").strip().lower()
+    if cmd in {"open", "opened"}:
+        return "open"
+    if cmd in {"close", "closed"}:
+        return "closed"
+    if cmd in {"on", "off"}:
+        return cmd
+    return cmd or "unknown"
 
 
 def _property_alert_cfg(property_id: str) -> dict:
@@ -510,6 +521,23 @@ def _filter_valve_devices_for_property(valve_devices: list[dict],
     return out
 
 
+def _live_water_cutoff_devices(property_id: str,
+                               client: HubitatCloudClient | None = None) -> list[dict]:
+    coll_cfg = _hubitat_collector_cfg(property_id) or {}
+    property_cfg = _property_alert_cfg(property_id)
+    if not coll_cfg:
+        return []
+    client = client or _hubitat_client_for_property(property_id)
+    if not client:
+        return []
+    devices = client.get_all_devices()
+    cutoff_devices = client.get_water_cutoff_devices(
+        devices,
+        coll_cfg.get("water_cutoff_devices") or [],
+    )
+    return _filter_valve_devices_for_property(cutoff_devices, property_cfg)
+
+
 def _valve_service_meta(property_cfg: dict | None,
                         valve_id: str,
                         raw_state: str | None) -> dict:
@@ -522,7 +550,7 @@ def _valve_service_action_label(action: str) -> str:
         return "Turn Water On"
     if cmd == "off":
         return "Turn Water Off"
-    return cmd.replace("_", " ").title() if cmd else "Valve Action"
+    return cmd.replace("_", " ").title() if cmd else "Water Cutoff Action"
 
 
 def _raw_valve_command_service_state(property_cfg: dict | None,
@@ -536,11 +564,9 @@ def _valve_event_label(event_type: str,
                        property_cfg: dict | None = None) -> str:
     kind = str(event_type or "").strip().lower()
     if kind == "water_shutoff_closed":
-        service_state = _raw_valve_command_service_state(property_cfg, valve_id, "closed")
-        return "water on" if service_state == "on" else "water off"
+        return "water off"
     if kind == "water_shutoff_opened":
-        service_state = _raw_valve_command_service_state(property_cfg, valve_id, "open")
-        return "water on" if service_state == "on" else "water off"
+        return "water on"
     if kind == "water_incident_opened":
         return "incident opened"
     if kind == "water_incident_acknowledged":
@@ -640,12 +666,13 @@ def _record_lock_state_unchanged(property_id: str,
 
 
 def _verify_valve_transition(client: HubitatCloudClient,
+                             property_id: str,
                              expected_states: dict[str, str],
                              name_hints: dict[str, str] | None = None,
                              polls: int = 4,
                              wait_seconds: int = 3) -> dict:
     """
-    Poll Hubitat valve states after a command and report devices that did not
+    Poll Hubitat water-cutoff states after a command and report devices that did not
     transition to the expected state.
     """
     pending: dict[str, dict] = {}
@@ -668,9 +695,9 @@ def _verify_valve_transition(client: HubitatCloudClient,
             time.sleep(wait_seconds)
 
         try:
-            current = client.get_valve_devices()
+            current = _live_water_cutoff_devices(property_id, client)
         except Exception as exc:
-            logger.warning("Valve transition verification poll failed: %s", exc)
+            logger.warning("Water cutoff transition verification poll failed: %s", exc)
             continue
 
         by_id = {str(x.get("entity_id")): x for x in current}
@@ -705,14 +732,14 @@ def _record_valve_state_unchanged(property_id: str,
         name = row.get("friendly_name") or did
         expected = str(row.get("expected_state") or "").strip().lower()
         observed = str(row.get("observed_state") or "").strip().lower() or "unknown"
-        msg = f"Command sent but valve status not changing: {name} stayed {observed}"
+        msg = f"Command sent but water cutoff status not changing: {name} stayed {observed}"
         details = {
             "device_id": did,
             "friendly_name": name,
             "action": str(action or "").strip().lower(),
             "expected_state": expected,
             "observed_state": observed,
-            "message": "Command sent but valve status not changing",
+            "message": "Command sent but water cutoff status not changing",
         }
         _record_system_event(
             event_type="valve_command_state_unchanged",
@@ -1011,7 +1038,7 @@ def _shutoff_valve_name(property_id: str, valve_id: str) -> str:
         return ""
     source_row = db.get_latest_reading(property_id, source="hubitat_cloud")
     payload = _parse_raw_payload(source_row)
-    for valve in (payload.get("valve_devices") or []):
+    for valve in (payload.get("water_cutoff_devices") or payload.get("valve_devices") or []):
         if str(valve.get("entity_id") or "").strip() == did:
             return str(valve.get("friendly_name") or did)
     row = db.get_shutoff_valve_state(property_id, did)
@@ -1034,7 +1061,8 @@ def _set_valve_expected_service_off(property_id: str,
         last_service_off_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     last_state = row.get("last_state") or "unknown"
     if expected_service_off:
-        last_state = water_service.water_action_to_raw_command("off", property_cfg, did) or last_state
+        off_cmd = water_service.water_action_to_raw_command("off", property_cfg, did)
+        last_state = _expected_valve_state(off_cmd) or last_state
     db.upsert_shutoff_valve_state(
         property_id=property_id,
         valve_id=did,
@@ -1150,7 +1178,7 @@ def _resolve_valve_incident(property_id: str,
         valve_id=did,
         friendly_name=name,
         last_state=(
-            water_service.water_action_to_raw_command("on", property_cfg, did)
+            _expected_valve_state(water_service.water_action_to_raw_command("on", property_cfg, did))
             or str(row.get("last_state") or "unknown").strip().lower()
             or "unknown"
         ),
@@ -1384,7 +1412,7 @@ async def dashboard(request: Request):
             list(hub_payload.get("lock_devices") or [])
         )
         visible_valves = _filter_valve_devices_for_property(
-            list(hub_payload.get("valve_devices") or []),
+            list(hub_payload.get("water_cutoff_devices") or hub_payload.get("valve_devices") or []),
             pcfg,
         )
         valve_devices, valve_counts = _decorate_valve_devices(
@@ -2088,7 +2116,7 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
 @app.post("/api/property/{property_id}/valves/all/{action}")
 async def api_valve_all(property_id: str, action: str,
                         _auth=Depends(_require_write_auth)):
-    """Turn water on/off for all shutoff valves in a property."""
+    """Turn water on/off for all water cutoff devices in a property."""
     cmd = str(action or "").strip().lower()
     if cmd not in {"on", "off", "open", "close"}:
         return JSONResponse(status_code=400, content={"error": "Action must be 'on', 'off', 'open', or 'close'"})
@@ -2103,7 +2131,7 @@ async def api_valve_all(property_id: str, action: str,
         return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
 
     try:
-        valves = _filter_valve_devices_for_property(client.get_valve_devices(), property_cfg)
+        valves = _live_water_cutoff_devices(property_id, client)
         if cmd in {"on", "off"}:
             results = []
             attempted = 0
@@ -2113,7 +2141,7 @@ async def api_valve_all(property_id: str, action: str,
                 if not did:
                     continue
                 raw_cmd = water_service.water_action_to_raw_command(cmd, property_cfg, did)
-                if raw_cmd not in {"open", "close"}:
+                if raw_cmd not in {"open", "close", "on", "off"}:
                     continue
                 attempted += 1
                 try:
@@ -2145,7 +2173,7 @@ async def api_valve_all(property_id: str, action: str,
             level="error",
             property_id=property_id,
             actor="api",
-            message=f"{_valve_service_action_label(cmd)} failed for all shutoff valves",
+            message=f"{_valve_service_action_label(cmd)} failed for all water cutoffs",
             details={"error": str(exc)},
         )
         return JSONResponse(status_code=502, content={"error": str(exc)})
@@ -2155,7 +2183,7 @@ async def api_valve_all(property_id: str, action: str,
         level="warning" if cmd in {"off", "close"} else "info",
         property_id=property_id,
         actor="api",
-        message=f"{_valve_service_action_label(cmd)} requested for all shutoff valves",
+        message=f"{_valve_service_action_label(cmd)} requested for all water cutoffs",
         details={
             "requested_action": cmd,
             "attempted": result.get("attempted"),
@@ -2175,11 +2203,11 @@ async def api_valve_all(property_id: str, action: str,
         attempted_ids.append(did)
         name_hints[did] = str(row.get("friendly_name") or did)
         raw_cmd = str(row.get("command") or "").strip().lower()
-        if raw_cmd in {"open", "close"}:
+        if raw_cmd in {"open", "close", "on", "off"}:
             expected_states[did] = _expected_valve_state(raw_cmd)
         if cmd in {"on", "off"}:
             requested_service_actions[did] = cmd
-        elif raw_cmd in {"open", "close"}:
+        elif raw_cmd in {"open", "close", "on", "off"}:
             service_action = _raw_valve_command_service_state(property_cfg, did, raw_cmd)
             if service_action in {"on", "off"}:
                 requested_service_actions[did] = service_action
@@ -2189,6 +2217,7 @@ async def api_valve_all(property_id: str, action: str,
     if attempted_ids:
         verify = _verify_valve_transition(
             client,
+            property_id,
             expected_states=expected_states,
             name_hints=name_hints,
             polls=4,
@@ -2237,7 +2266,7 @@ async def api_valve_all(property_id: str, action: str,
         "action": cmd,
         "result": result,
         "warning": ({
-            "message": f"Command sent but valve status not changing for {len(warnings)} valve(s)",
+            "message": f"Command sent but water cutoff status not changing for {len(warnings)} device(s)",
             "count": len(warnings),
             "devices": warnings,
         } if warnings else None),
@@ -2247,7 +2276,7 @@ async def api_valve_all(property_id: str, action: str,
 @app.post("/api/property/{property_id}/valves/{device_id}/{action}")
 async def api_valve_device(property_id: str, device_id: str, action: str,
                            _auth=Depends(_require_write_auth)):
-    """Turn water on/off for one shutoff valve device."""
+    """Turn water on/off for one water cutoff device."""
     cmd = str(action or "").strip().lower()
     if cmd not in {"on", "off", "open", "close"}:
         return JSONResponse(status_code=400, content={"error": "Action must be 'on', 'off', 'open', or 'close'"})
@@ -2268,14 +2297,14 @@ async def api_valve_device(property_id: str, device_id: str, action: str,
 
     valve_name = device_id
     try:
-        known_valves = _filter_valve_devices_for_property(client.get_valve_devices(), property_cfg)
+        known_valves = _live_water_cutoff_devices(property_id, client)
         for valve in known_valves:
             if str(valve.get("entity_id")) == str(device_id):
                 valve_name = valve.get("friendly_name") or device_id
                 break
         raw_cmd = water_service.water_action_to_raw_command(cmd, property_cfg, str(device_id))
-        if raw_cmd not in {"open", "close"}:
-            return JSONResponse(status_code=400, content={"error": f"Unsupported valve action '{cmd}'"})
+        if raw_cmd not in {"open", "close", "on", "off"}:
+            return JSONResponse(status_code=400, content={"error": f"Unsupported water cutoff action '{cmd}'"})
         result = client.command_device(device_id, raw_cmd)
     except Exception as exc:
         _record_system_event(
@@ -2301,6 +2330,7 @@ async def api_valve_device(property_id: str, device_id: str, action: str,
     expected_raw = water_service.water_action_to_raw_command(cmd, property_cfg, str(device_id))
     verify = _verify_valve_transition(
         client,
+        property_id,
         expected_states={str(device_id): _expected_valve_state(expected_raw)},
         name_hints={str(device_id): str(valve_name)},
         polls=4,

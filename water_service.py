@@ -1,9 +1,11 @@
 """
-Helpers for translating raw Hubitat valve states into water-service semantics.
+Helpers for translating raw Hubitat water-cutoff states into water-service
+semantics.
 
-Some shutoff valves report a raw `closed` state while the property's water
-service is actually ON, so UI and alert logic should reason about `Water On`
-and `Water Off` instead of raw mechanical position.
+Some sites expose true valves with raw `open`/`closed` states while others,
+like High Country, expose the cutoff through a relay with raw `on`/`off`
+states. UI and alert logic should reason about `Water On` and `Water Off`
+instead of raw mechanical orientation.
 """
 
 from __future__ import annotations
@@ -18,32 +20,59 @@ def valve_is_excluded(property_cfg: dict | None, valve_id: str | None) -> bool:
     did = str(valve_id or "").strip()
     if not did:
         return False
-    excluded = cfg.get("water_valve_exclude_ids") or []
+    excluded = list(cfg.get("water_cutoff_exclude_ids") or []) + list(cfg.get("water_valve_exclude_ids") or [])
     return did in {str(item or "").strip() for item in excluded if str(item or "").strip()}
 
 
+def _paired_raw_state(raw_state: str) -> str:
+    raw = _norm(raw_state)
+    pairs = {
+        "open": "closed",
+        "closed": "open",
+        "on": "off",
+        "off": "on",
+    }
+    return pairs.get(raw, "")
+
+
+def _raw_state_to_command(raw_state: str) -> str:
+    raw = _norm(raw_state)
+    return {
+        "open": "open",
+        "closed": "close",
+        "on": "on",
+        "off": "off",
+    }.get(raw, "")
+
+
 def valve_service_on_raw_state(property_cfg: dict | None, valve_id: str | None = None) -> str:
-    """Return which raw valve state means `Water On` for this valve."""
+    """Return which raw device state means `Water On` for this water cutoff."""
     cfg = property_cfg or {}
     did = str(valve_id or "").strip()
 
-    raw_map = cfg.get("water_valve_service_on_map") or {}
+    raw_map = cfg.get("water_cutoff_service_on_map") or cfg.get("water_valve_service_on_map") or {}
     if isinstance(raw_map, dict) and did:
         mapped = _norm(raw_map.get(did))
-        if mapped in {"open", "closed"}:
+        if mapped in {"open", "closed", "on", "off"}:
             return mapped
 
-    fallback = _norm(cfg.get("water_valve_service_on_state") or "open")
-    return fallback if fallback in {"open", "closed"} else "open"
+    fallback = _norm(
+        cfg.get("water_cutoff_service_on_state")
+        or cfg.get("water_valve_service_on_state")
+        or "open"
+    )
+    return fallback if fallback in {"open", "closed", "on", "off"} else "open"
 
 
 def valve_service_state(raw_state: str | None,
                         property_cfg: dict | None = None,
                         valve_id: str | None = None) -> dict:
-    """Decorate a raw valve state with water-service meaning."""
+    """Decorate a raw water-cutoff state with water-service meaning."""
     raw = _norm(raw_state)
+    if raw == "close":
+        raw = "closed"
     water_on_raw = valve_service_on_raw_state(property_cfg, valve_id)
-    water_off_raw = "closed" if water_on_raw == "open" else "open"
+    water_off_raw = _paired_raw_state(water_on_raw)
 
     out = {
         "raw_state": raw or "unknown",
@@ -76,8 +105,11 @@ def valve_service_state(raw_state: str | None,
         })
         return out
 
-    if raw == "opening":
-        turning_on = (water_on_raw == "open")
+    if raw in {"opening", "turning_on", "switching_on"}:
+        if raw == "opening":
+            turning_on = (water_on_raw == "open")
+        else:
+            turning_on = (water_on_raw == "on")
         out.update({
             "service_state": "transition_on" if turning_on else "transition_off",
             "status": "warning",
@@ -87,8 +119,11 @@ def valve_service_state(raw_state: str | None,
         })
         return out
 
-    if raw == "closing":
-        turning_on = (water_on_raw == "closed")
+    if raw in {"closing", "turning_off", "switching_off"}:
+        if raw == "closing":
+            turning_on = (water_on_raw == "closed")
+        else:
+            turning_on = (water_on_raw == "off")
         out.update({
             "service_state": "transition_on" if turning_on else "transition_off",
             "status": "warning",
@@ -106,15 +141,13 @@ def valve_service_state(raw_state: str | None,
 def water_action_to_raw_command(action: str | None,
                                 property_cfg: dict | None = None,
                                 valve_id: str | None = None) -> str:
-    """Map `on/off` service commands to raw Hubitat open/close commands."""
+    """Map `on/off` service commands to raw Hubitat device commands."""
     cmd = _norm(action)
-    if cmd in {"open", "close"}:
-        return cmd
+    if cmd in {"open", "close", "on", "off"}:
+        if cmd in {"open", "close"}:
+            return cmd
+        water_on_raw = valve_service_on_raw_state(property_cfg, valve_id)
+        water_off_raw = _paired_raw_state(water_on_raw)
+        return _raw_state_to_command(water_on_raw if cmd == "on" else water_off_raw)
 
-    water_on_raw = valve_service_on_raw_state(property_cfg, valve_id)
-    water_off_raw = "closed" if water_on_raw == "open" else "open"
-    if cmd == "on":
-        return water_on_raw
-    if cmd == "off":
-        return water_off_raw
     return ""

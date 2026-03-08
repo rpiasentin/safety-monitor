@@ -479,6 +479,60 @@ def case_water_shutoff_inverted_water_off_alerts():
         harness.restore()
 
 
+def case_water_shutoff_relay_water_on_suppressed():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "82",
+            "friendly_name": "High Country water cutoff",
+            "state": "on",
+        }]
+        fired = proc.process(snap, {
+            "water_cutoff_service_on_map": {"82": "on"},
+        })
+        assert len(fired) == 0
+        assert len(harness.db.alerts) == 0
+    finally:
+        harness.restore()
+
+
+def case_water_shutoff_relay_water_off_alerts():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "82",
+            "friendly_name": "High Country water cutoff",
+            "state": "off",
+        }]
+        fired = proc.process(snap, {
+            "water_cutoff_service_on_map": {"82": "on"},
+            "water_pushover_enabled": False,
+        })
+        assert len(fired) == 1 and fired[0]["type"] == "water_shutoff"
+        assert len(harness.db.alerts) == 1
+        assert "WATER OFF" in harness.db.alerts[0]["message"]
+    finally:
+        harness.restore()
+
+
 def case_water_shutoff_excluded_device_clears():
     harness = AlertHarness()
     harness.patch()
@@ -794,6 +848,8 @@ CASES = [
     ("water shutoff push toggle honored", case_water_shutoff_push_toggle),
     ("water shutoff inverted valve water-on suppressed", case_water_shutoff_inverted_water_on_suppressed),
     ("water shutoff inverted valve water-off alerts", case_water_shutoff_inverted_water_off_alerts),
+    ("water shutoff relay water-on suppressed", case_water_shutoff_relay_water_on_suppressed),
+    ("water shutoff relay water-off alerts", case_water_shutoff_relay_water_off_alerts),
     ("water shutoff excluded device clears", case_water_shutoff_excluded_device_clears),
     ("water shutoff ack suppresses re-alert", case_water_shutoff_ack_suppresses_realert),
     ("water shutoff expected close suppressed", case_water_shutoff_expected_close_suppressed),
