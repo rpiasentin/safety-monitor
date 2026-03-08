@@ -813,7 +813,7 @@
                   {% endif %}
                 </span>
               </div>
-              <div class="property-safety-list">
+              <div class="property-safety-list water-sensor-list{% if card.water_devices|length > 3 %} is-scrollable{% endif %}">
                 {% for sensor in card.water_devices %}
                 <div class="property-safety-row">
                   <div class="property-safety-name-wrap">
@@ -846,14 +846,14 @@
               <div class="property-safety-head">
                 <span class="property-safety-title">Shutoff Valves</span>
                 <span class="property-safety-meta">
-                  {{ card.valve_counts.open }} open · {{ card.valve_counts.closed }} closed
+                  {{ card.valve_counts.on }} water on · {{ card.valve_counts.off }} water off
                 </span>
               </div>
               <div class="property-lock-actions">
-                <button onclick='runValveAction({{ card.id|tojson }}, "open", "all")'
-                        class="property-action-btn action-open">Open all</button>
-                <button onclick='runValveAction({{ card.id|tojson }}, "close", "all")'
-                        class="property-action-btn action-close">Close all</button>
+                <button onclick='runValveAction({{ card.id|tojson }}, "on", "all")'
+                        class="property-action-btn action-open">Turn Water On</button>
+                <button onclick='runValveAction({{ card.id|tojson }}, "off", "all")'
+                        class="property-action-btn action-close">Turn Water Off</button>
               </div>
               <div class="property-safety-list">
                 {% for valve in card.valve_devices %}
@@ -867,29 +867,21 @@
                     {% endif %}
                     {% if valve.incident_active %}
                     <span class="property-lock-warning">
-                      active water incident{% if valve.incident_age %} · closed {{ valve.incident_age }}{% endif %}
+                      active water incident{% if valve.incident_age %} · off {{ valve.incident_age }}{% endif %}
                     </span>
                     {% elif valve.incident_acknowledged %}
                     <span class="property-lock-warning">
-                      incident acknowledged until reopened
+                      incident acknowledged until water on
                     </span>
-                    {% elif valve.expected_closed %}
+                    {% elif valve.expected_water_off %}
                     <span class="property-lock-warning">
-                      closed by operator
+                      water turned off by operator
                     </span>
                     {% endif %}
                     {% if valve.recent_event %}
                     <span class="property-lock-warning">
-                      {% if valve.recent_event.event_type == 'water_shutoff_closed' %}
-                        closed {{ valve.recent_event_age }}
-                      {% elif valve.recent_event.event_type == 'water_shutoff_opened' %}
-                        opened {{ valve.recent_event_age }}
-                      {% elif valve.recent_event.event_type == 'water_incident_opened' %}
-                        incident opened {{ valve.recent_event_age }}
-                      {% elif valve.recent_event.event_type == 'water_incident_acknowledged' %}
-                        acknowledged {{ valve.recent_event_age }}
-                      {% elif valve.recent_event.event_type == 'water_incident_resolved' %}
-                        resolved {{ valve.recent_event_age }}
+                      {% if valve.recent_event_label %}
+                        {{ valve.recent_event_label }} {{ valve.recent_event_age }}
                       {% else %}
                         {{ valve.recent_event.message }}
                       {% endif %}
@@ -915,15 +907,15 @@
                       Acknowledge
                     </button>
                     {% endif %}
-                    <button onclick='runValveAction({{ card.id|tojson }}, "open", {{ valve.entity_id|tojson }})'
+                    <button onclick='runValveAction({{ card.id|tojson }}, "on", {{ valve.entity_id|tojson }})'
                             class="property-action-btn action-open"
-                            {% if not valve.can_open %}disabled{% endif %}>
-                      Open
+                            {% if not valve.can_turn_water_on %}disabled{% endif %}>
+                      Turn Water On
                     </button>
-                    <button onclick='runValveAction({{ card.id|tojson }}, "close", {{ valve.entity_id|tojson }})'
+                    <button onclick='runValveAction({{ card.id|tojson }}, "off", {{ valve.entity_id|tojson }})'
                             class="property-action-btn action-close"
-                            {% if not valve.can_close %}disabled{% endif %}>
-                      Close
+                            {% if not valve.can_turn_water_off %}disabled{% endif %}>
+                      Turn Water Off
                     </button>
                   </div>
                 </div>
@@ -1016,7 +1008,7 @@
                 {{ ago(alert.triggered_at) }}
                 {% if alert.pushover_sent %} · pushed{% endif %}
                 {% if alert.alert_type == 'water' and not alert.resolved_at %} · latched until cleared{% endif %}
-                {% if alert.alert_type == 'water_shutoff' and not alert.resolved_at %} · active until reopened/ack{% endif %}
+                {% if alert.alert_type == 'water_shutoff' and not alert.resolved_at %} · active until water on/ack{% endif %}
                 {% if alert.alert_type == 'smoke' and not alert.resolved_at %} · active until clear/ack{% endif %}
               </p>
             </div>
@@ -1449,7 +1441,14 @@
     }
 
     async function runValveAction(pid, action, deviceId = 'all') {
-      const verb = action === 'open' ? 'Open' : 'Close';
+      const normalized = String(action || '').toLowerCase();
+      const verb = normalized === 'on'
+        ? 'Turn Water On'
+        : normalized === 'off'
+          ? 'Turn Water Off'
+          : normalized === 'open'
+            ? 'Open'
+            : 'Close';
       const target = deviceId === 'all' ? `all shutoff valves for ${pid}` : `shutoff valve ${deviceId} at ${pid}`;
       if (!confirm(`${verb} ${target}?`)) return;
 
@@ -1650,7 +1649,7 @@
         }
 
         if (statusEl) {
-          statusEl.textContent = '✓ Incident acknowledged until reopened';
+          statusEl.textContent = '✓ Incident acknowledged until water turns on';
           statusEl.classList.replace('text-gray-400', 'text-green-400');
         }
         queueDashboardRefresh('valve-incident-ack', true);

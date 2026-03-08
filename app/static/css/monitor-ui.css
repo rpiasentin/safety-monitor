@@ -602,6 +602,13 @@
   gap: 0.34rem;
 }
 
+.water-sensor-list.is-scrollable {
+  max-height: 10.7rem;
+  overflow-y: auto;
+  padding-right: 0.12rem;
+  scrollbar-width: thin;
+}
+
 .property-safety-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;

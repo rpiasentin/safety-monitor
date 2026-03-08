@@ -4,7 +4,7 @@ Alert processing and Pushover notifications.
 Checks:
   - Battery SOC below threshold (EG4 or Hubitat devices)
   - Water sensors reporting wet/leak state (latched critical until manual clear)
-  - Unexpected shutoff valves closed (latched critical until reopen/ack)
+  - Unexpected shutoff valves turning water OFF (latched critical until water on/ack)
   - Smoke/CO alarm states that remain active beyond sustained threshold
   - Collector offline (no data for > timeout_minutes)
   - Temperature below threshold (°F)
@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 
 import db
 import formatters
+import water_service
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -498,34 +499,41 @@ class AlertProcessor:
                     continue
 
             state = str(valve.get("state") or "unknown").strip().lower()
+            service_meta = water_service.valve_service_state(state, property_cfg, valve_id)
+            service_state = service_meta.get("service_state")
             row = state_map.get(valve_id) or {}
             last_state = str(row.get("last_state") or "unknown").strip().lower()
+            last_service_state = water_service.valve_service_state(
+                last_state,
+                property_cfg,
+                valve_id,
+            ).get("service_state")
             acked = bool(int(row.get("acked_until_open") or 0))
-            expected_closed = bool(int(row.get("expected_closed") or 0))
-            last_closed_at = row.get("last_closed_at")
+            expected_service_off = bool(int(row.get("expected_closed") or 0))
+            last_service_off_at = row.get("last_closed_at")
             trigger_sensor_id = str(row.get("trigger_sensor_id") or "").strip() or None
             trigger_sensor_name = str(row.get("trigger_sensor_name") or "").strip() or None
 
-            if state == "closed":
-                if not last_closed_at:
-                    last_closed_at = now_ts
+            if service_state == "off":
+                if not last_service_off_at:
+                    last_service_off_at = now_ts
 
                 recent_ctx = {"primary": None, "recent": []}
-                if not expected_closed and not (trigger_sensor_id or trigger_sensor_name):
+                if not expected_service_off and not (trigger_sensor_id or trigger_sensor_name):
                     recent_ctx = self._recent_wet_sensor_context(pid, correlation_minutes)
                     primary = recent_ctx.get("primary") or {}
                     trigger_sensor_id = primary.get("sensor_id") or None
                     trigger_sensor_name = primary.get("friendly_name") or None
 
                 active = db.find_active_alert(pid, "water_shutoff", sensor_id=valve_id)
-                if not active and not acked and not expected_closed:
+                if not active and not acked and not expected_service_off:
                     trigger_note = (
                         f" after {trigger_sensor_name} reported WET"
                         if trigger_sensor_name else ""
                     )
                     msg = (
-                        f"🚰 SHUTOFF CLOSED at {snapshot.get('property_name', pid)}: "
-                        f"{name} is CLOSED{trigger_note}"
+                        f"🚰 WATER OFF at {snapshot.get('property_name', pid)}: "
+                        f"{name}{trigger_note}"
                     )
                     alert_id = db.insert_alert(
                         pid,
@@ -551,12 +559,13 @@ class AlertProcessor:
                         level="warning",
                         property_id=pid,
                         actor="alert",
-                        message=f"Water incident opened: {name} shutoff closed",
+                        message=f"Water incident opened: {name} water off",
                         details={
                             "alert_id": alert_id,
                             "device_id": valve_id,
                             "valve_id": valve_id,
                             "friendly_name": name,
+                            "raw_state": state,
                             "trigger_sensor_id": trigger_sensor_id,
                             "trigger_sensor_name": trigger_sensor_name,
                             "correlated_water_sensors": recent_ctx.get("recent") or [],
@@ -567,29 +576,29 @@ class AlertProcessor:
                         "type": "water_shutoff",
                         "sensor": valve_id,
                         "severity": "critical",
-                        "state": "closed",
+                        "state": "off",
                     })
-                    logger.error("WATER SHUTOFF ALERT [%s] %s: closed", pid, name)
+                    logger.error("WATER SHUTOFF ALERT [%s] %s: water off", pid, name)
 
                 db.upsert_shutoff_valve_state(
                     property_id=pid,
                     valve_id=valve_id,
                     friendly_name=name,
-                    last_state="closed",
-                    last_closed_at=last_closed_at,
+                    last_state=state,
+                    last_closed_at=last_service_off_at,
                     acked_until_open=acked,
-                    expected_closed=expected_closed,
-                    trigger_sensor_id=None if expected_closed else trigger_sensor_id,
-                    trigger_sensor_name=None if expected_closed else trigger_sensor_name,
+                    expected_closed=expected_service_off,
+                    trigger_sensor_id=None if expected_service_off else trigger_sensor_id,
+                    trigger_sensor_name=None if expected_service_off else trigger_sensor_name,
                 )
                 continue
 
-            if state == "open":
+            if service_state == "on":
                 resolved = db.resolve_alerts_for_sensor(pid, "water_shutoff", valve_id)
                 had_incident = bool(
                     resolved
                     or acked
-                    or (last_state == "closed" and not expected_closed)
+                    or (last_service_state == "off" and not expected_service_off)
                     or trigger_sensor_id
                     or trigger_sensor_name
                 )
@@ -599,16 +608,17 @@ class AlertProcessor:
                         level="info",
                         property_id=pid,
                         actor="alert",
-                        message=f"Water incident resolved: {name} reopened",
+                        message=f"Water incident resolved: {name} water turned on",
                         details={
                             "device_id": valve_id,
                             "valve_id": valve_id,
                             "friendly_name": name,
                             "resolved_alerts": int(resolved),
+                            "raw_state": state,
                             "trigger_sensor_id": trigger_sensor_id,
                             "trigger_sensor_name": trigger_sensor_name,
                             "acknowledged": bool(acked),
-                            "resolution": "reopened",
+                            "resolution": "water_turned_on",
                         },
                     )
 
@@ -616,8 +626,8 @@ class AlertProcessor:
                     property_id=pid,
                     valve_id=valve_id,
                     friendly_name=name,
-                    last_state="open",
-                    last_closed_at=last_closed_at,
+                    last_state=state,
+                    last_closed_at=last_service_off_at,
                     acked_until_open=False,
                     expected_closed=False,
                     trigger_sensor_id=None,
@@ -630,9 +640,9 @@ class AlertProcessor:
                 valve_id=valve_id,
                 friendly_name=name,
                 last_state=state or "unknown",
-                last_closed_at=last_closed_at,
+                last_closed_at=last_service_off_at,
                 acked_until_open=acked,
-                expected_closed=expected_closed,
+                expected_closed=expected_service_off,
                 trigger_sensor_id=trigger_sensor_id,
                 trigger_sensor_name=trigger_sensor_name,
             )

@@ -46,6 +46,8 @@ properties:
         - "OUT-N-T"
       outdoor_temp_warning: 15
       outdoor_temp_critical: 0
+      water_valve_service_on_map:
+        "39": "closed"
     collectors:
       - type: hubitat_cloud
         endpoint: "https://cloud.hubitat.com/api/8d4cc6c3-ce67-4421-8984-5669cb4d4696/apps/82/devices/all"
@@ -75,6 +77,8 @@ properties:
         - "Coop sensor"
       outdoor_temp_warning: 15
       outdoor_temp_critical: 0
+      water_valve_service_on_map:
+        "93": "open"
 
   - id: rd
     name: "Redwood"
@@ -83,6 +87,9 @@ properties:
       - type: hubitat_cloud
         endpoint: "https://cloud.hubitat.com/api/0709134d-2660-43bc-a6d5-a48d98e8ad1b/apps/58/devices/all"
         primary_temp_sensor: "sensor.rd_main_temp"
+    alerts:
+      water_valve_service_on_map:
+        "14": "closed"
 
 alerts:
   temperature:

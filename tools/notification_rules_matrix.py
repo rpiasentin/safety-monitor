@@ -424,6 +424,61 @@ def case_water_shutoff_push_toggle():
         harness.restore()
 
 
+def case_water_shutoff_inverted_water_on_suppressed():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "39",
+            "friendly_name": "Main water cutoff",
+            "state": "closed",
+        }]
+        fired = proc.process(snap, {
+            "water_valve_service_on_map": {"39": "closed"},
+        })
+        assert len(fired) == 0
+        assert len(harness.db.alerts) == 0
+        assert len(harness.push.calls) == 0
+    finally:
+        harness.restore()
+
+
+def case_water_shutoff_inverted_water_off_alerts():
+    harness = AlertHarness()
+    harness.patch()
+    try:
+        cfg = _processor_cfg()
+        cfg["temperature"]["enabled"] = False
+        cfg["battery"]["enabled"] = False
+        cfg["smoke"]["enabled"] = False
+        cfg["offline"]["enabled"] = False
+
+        proc = alerts.AlertProcessor(cfg)
+        snap = _base_snapshot()
+        snap["valve_devices"] = [{
+            "entity_id": "39",
+            "friendly_name": "Main water cutoff",
+            "state": "open",
+        }]
+        fired = proc.process(snap, {
+            "water_valve_service_on_map": {"39": "closed"},
+            "water_pushover_enabled": False,
+        })
+        assert len(fired) == 1 and fired[0]["type"] == "water_shutoff"
+        assert len(harness.db.alerts) == 1
+        assert "WATER OFF" in harness.db.alerts[0]["message"]
+    finally:
+        harness.restore()
+
+
 def case_water_shutoff_ack_suppresses_realert():
     harness = AlertHarness()
     harness.patch()
@@ -694,6 +749,8 @@ CASES = [
     ("battery push toggle honored", case_battery_push_toggle),
     ("water push toggle honored", case_water_push_toggle),
     ("water shutoff push toggle honored", case_water_shutoff_push_toggle),
+    ("water shutoff inverted valve water-on suppressed", case_water_shutoff_inverted_water_on_suppressed),
+    ("water shutoff inverted valve water-off alerts", case_water_shutoff_inverted_water_off_alerts),
     ("water shutoff ack suppresses re-alert", case_water_shutoff_ack_suppresses_realert),
     ("water shutoff expected close suppressed", case_water_shutoff_expected_close_suppressed),
     ("water shutoff reopen resolves", case_water_shutoff_reopen_resolves),

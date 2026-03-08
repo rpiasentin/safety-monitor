@@ -37,6 +37,7 @@ from fastapi.templating import Jinja2Templates
 import db
 import formatters
 import scheduler
+import water_service
 from collectors.hubitat import HubitatCloudClient
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -489,6 +490,53 @@ def _expected_valve_state(action: str) -> str:
     return "open" if str(action or "").strip().lower() == "open" else "closed"
 
 
+def _property_alert_cfg(property_id: str) -> dict:
+    prop = _get_property_cfg(property_id) or {}
+    return prop.get("alerts", {}) or {}
+
+
+def _valve_service_meta(property_cfg: dict | None,
+                        valve_id: str,
+                        raw_state: str | None) -> dict:
+    return water_service.valve_service_state(raw_state, property_cfg, valve_id)
+
+
+def _valve_service_action_label(action: str) -> str:
+    cmd = str(action or "").strip().lower()
+    if cmd == "on":
+        return "Turn Water On"
+    if cmd == "off":
+        return "Turn Water Off"
+    return cmd.replace("_", " ").title() if cmd else "Valve Action"
+
+
+def _raw_valve_command_service_state(property_cfg: dict | None,
+                                     valve_id: str,
+                                     raw_command: str) -> str:
+    return _valve_service_meta(property_cfg, valve_id, raw_command).get("service_state") or ""
+
+
+def _valve_event_label(event_type: str,
+                       valve_id: str,
+                       property_cfg: dict | None = None) -> str:
+    kind = str(event_type or "").strip().lower()
+    if kind == "water_shutoff_closed":
+        service_state = _raw_valve_command_service_state(property_cfg, valve_id, "closed")
+        return "water on" if service_state == "on" else "water off"
+    if kind == "water_shutoff_opened":
+        service_state = _raw_valve_command_service_state(property_cfg, valve_id, "open")
+        return "water on" if service_state == "on" else "water off"
+    if kind == "water_incident_opened":
+        return "incident opened"
+    if kind == "water_incident_acknowledged":
+        return "acknowledged"
+    if kind == "water_incident_resolved":
+        return "water on"
+    if kind == "valve_command_state_unchanged":
+        return "status not changing"
+    return ""
+
+
 def _verify_lock_transition(client: HubitatCloudClient,
                             expected_states: dict[str, str],
                             name_hints: dict[str, str] | None = None,
@@ -805,57 +853,72 @@ def _decorate_water_devices(water_devices: list[dict],
         row["recent_event"] = event
         row["recent_event_age"] = formatters.ago(event.get("created_at")) if event else ""
         decorated.append(row)
+    decorated.sort(
+        key=lambda row: (
+            0 if str(row.get("state") or "").strip().lower() == "wet" else 1,
+            str(row.get("friendly_name") or row.get("entity_id") or "").lower(),
+        )
+    )
     return decorated, counts
 
 
 def _decorate_valve_devices(valve_devices: list[dict],
+                            property_cfg: dict | None = None,
                             collected_at: str | None = None,
                             recent_event_map: dict[str, dict] | None = None,
                             valve_state_map: dict[str, dict] | None = None,
                             active_alert_map: dict[str, dict] | None = None) -> tuple[list[dict], dict]:
     decorated = []
-    counts = {"open": 0, "closed": 0, "other": 0}
+    counts = {"on": 0, "off": 0, "other": 0}
     recent_event_map = recent_event_map or {}
     valve_state_map = valve_state_map or {}
     active_alert_map = active_alert_map or {}
     for valve in (valve_devices or []):
         row = dict(valve)
+        valve_id = str(row.get("entity_id") or "").strip()
         state = str(row.get("state") or "unknown").strip().lower()
-        if state == "open":
-            status = "good"
-            state_label = "Open"
-            counts["open"] += 1
-        elif state == "closed":
-            status = "critical"
-            state_label = "Closed"
-            counts["closed"] += 1
-        elif state in {"opening", "closing"}:
-            status = "warning"
-            state_label = state.title()
-            counts["other"] += 1
+        service_meta = _valve_service_meta(property_cfg, valve_id, state)
+        row["status"] = service_meta.get("status") or "unknown"
+        row["state_label"] = service_meta.get("state_label") or "Unknown"
+        row["service_state"] = service_meta.get("service_state") or "unknown"
+        row["water_on_raw_state"] = service_meta.get("water_on_raw_state")
+        row["water_off_raw_state"] = service_meta.get("water_off_raw_state")
+        row["can_turn_water_on"] = bool(service_meta.get("can_turn_water_on"))
+        row["can_turn_water_off"] = bool(service_meta.get("can_turn_water_off"))
+        if row["service_state"] == "on":
+            counts["on"] += 1
+        elif row["service_state"] == "off":
+            counts["off"] += 1
         else:
-            status = "unknown"
-            state_label = state.replace("_", " ").title() if state else "Unknown"
             counts["other"] += 1
-        row["status"] = status
-        row["state_label"] = state_label
         row["activity"] = _maker_device_activity(row.get("last_activity"), collected_at)
-        event = recent_event_map.get(str(row.get("entity_id") or "").strip())
+        event = recent_event_map.get(valve_id)
         row["recent_event"] = event
         row["recent_event_age"] = formatters.ago(event.get("created_at")) if event else ""
-        valve_state = valve_state_map.get(str(row.get("entity_id") or "").strip()) or {}
-        active_alert = active_alert_map.get(str(row.get("entity_id") or "").strip())
+        row["recent_event_label"] = _valve_event_label(
+            event.get("event_type") if event else "",
+            valve_id,
+            property_cfg,
+        )
+        valve_state = valve_state_map.get(valve_id) or {}
+        active_alert = active_alert_map.get(valve_id)
         row["incident_active"] = bool(active_alert)
         row["incident_acknowledged"] = bool(int(valve_state.get("acked_until_open") or 0))
-        row["expected_closed"] = bool(int(valve_state.get("expected_closed") or 0))
+        row["expected_water_off"] = bool(int(valve_state.get("expected_closed") or 0))
         row["trigger_sensor_name"] = str(valve_state.get("trigger_sensor_name") or "").strip()
         row["trigger_sensor_id"] = str(valve_state.get("trigger_sensor_id") or "").strip()
-        row["last_closed_at"] = valve_state.get("last_closed_at")
+        row["last_water_off_at"] = valve_state.get("last_closed_at")
         row["incident_age"] = formatters.ago(valve_state.get("last_closed_at")) if valve_state.get("last_closed_at") else ""
         row["can_ack_incident"] = bool(
-            state == "closed" and active_alert and not row["incident_acknowledged"]
+            row["service_state"] == "off" and active_alert and not row["incident_acknowledged"]
         )
         decorated.append(row)
+    decorated.sort(
+        key=lambda row: (
+            0 if row.get("service_state") == "off" else 1 if row.get("service_state") == "transition_off" else 2,
+            str(row.get("friendly_name") or row.get("entity_id") or "").lower(),
+        )
+    )
     return decorated, counts
 
 
@@ -942,24 +1005,31 @@ def _shutoff_valve_name(property_id: str, valve_id: str) -> str:
     return did
 
 
-def _set_valve_expected_closed(property_id: str,
-                               valve_id: str,
-                               friendly_name: str = "",
-                               expected_closed: bool = True) -> None:
+def _set_valve_expected_service_off(property_id: str,
+                                    valve_id: str,
+                                    friendly_name: str = "",
+                                    expected_service_off: bool = True) -> None:
     did = str(valve_id or "").strip()
     if not did:
         return
     row = db.get_shutoff_valve_state(property_id, did) or {}
+    property_cfg = _property_alert_cfg(property_id)
+    last_service_off_at = row.get("last_closed_at")
+    if expected_service_off and not last_service_off_at:
+        last_service_off_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    last_state = row.get("last_state") or "unknown"
+    if expected_service_off:
+        last_state = water_service.water_action_to_raw_command("off", property_cfg, did) or last_state
     db.upsert_shutoff_valve_state(
         property_id=property_id,
         valve_id=did,
         friendly_name=friendly_name or row.get("friendly_name") or did,
-        last_state=row.get("last_state") or ("closed" if expected_closed else "unknown"),
-        last_closed_at=row.get("last_closed_at"),
-        acked_until_open=False if expected_closed else bool(int(row.get("acked_until_open") or 0)),
-        expected_closed=expected_closed,
-        trigger_sensor_id=None if expected_closed else row.get("trigger_sensor_id"),
-        trigger_sensor_name=None if expected_closed else row.get("trigger_sensor_name"),
+        last_state=last_state,
+        last_closed_at=last_service_off_at,
+        acked_until_open=False if expected_service_off else bool(int(row.get("acked_until_open") or 0)),
+        expected_closed=expected_service_off,
+        trigger_sensor_id=None if expected_service_off else row.get("trigger_sensor_id"),
+        trigger_sensor_name=None if expected_service_off else row.get("trigger_sensor_name"),
     )
 
 
@@ -1016,21 +1086,27 @@ def _resolve_valve_incident(property_id: str,
                             valve_id: str,
                             friendly_name: str = "",
                             actor: str = "api",
-                            resolution: str = "reopened") -> dict:
+                            resolution: str = "water_turned_on") -> dict:
     did = str(valve_id or "").strip()
     row = db.get_shutoff_valve_state(property_id, did) or {}
+    property_cfg = _property_alert_cfg(property_id)
     name = friendly_name or row.get("friendly_name") or _shutoff_valve_name(property_id, did) or did
     acked = bool(int(row.get("acked_until_open") or 0))
-    expected_closed = bool(int(row.get("expected_closed") or 0))
+    expected_service_off = bool(int(row.get("expected_closed") or 0))
     trigger_sensor_id = row.get("trigger_sensor_id")
     trigger_sensor_name = row.get("trigger_sensor_name")
+    last_service_state = _valve_service_meta(
+        property_cfg,
+        did,
+        str(row.get("last_state") or "").strip().lower(),
+    ).get("service_state")
     cleared = db.resolve_alerts_for_sensor(property_id, "water_shutoff", did)
     should_log = bool(
         cleared
         or acked
         or (
-            str(row.get("last_state") or "").strip().lower() == "closed"
-            and not expected_closed
+            last_service_state == "off"
+            and not expected_service_off
         )
         or trigger_sensor_id
         or trigger_sensor_name
@@ -1041,7 +1117,7 @@ def _resolve_valve_incident(property_id: str,
             level="info",
             property_id=property_id,
             actor=actor,
-            message=f"Water incident resolved: {name} reopened",
+            message=f"Water incident resolved: {name} water turned on",
             details={
                 "device_id": did,
                 "valve_id": did,
@@ -1058,7 +1134,11 @@ def _resolve_valve_incident(property_id: str,
         property_id=property_id,
         valve_id=did,
         friendly_name=name,
-        last_state="open",
+        last_state=(
+            water_service.water_action_to_raw_command("on", property_cfg, did)
+            or str(row.get("last_state") or "unknown").strip().lower()
+            or "unknown"
+        ),
         last_closed_at=row.get("last_closed_at"),
         acked_until_open=False,
         expected_closed=False,
@@ -1078,10 +1158,15 @@ def _ack_active_valve_incidents(property_id: str,
                                 actor: str = "api") -> dict:
     active_alerts = _active_alert_map("water_shutoff").get(property_id) or {}
     state_map = db.get_shutoff_valve_state_map(property_id)
+    property_cfg = _property_alert_cfg(property_id)
     valve_ids = set(active_alerts.keys())
     for did, row in (state_map or {}).items():
         if (
-            str(row.get("last_state") or "").strip().lower() == "closed"
+            _valve_service_meta(
+                property_cfg,
+                did,
+                str(row.get("last_state") or "").strip().lower(),
+            ).get("service_state") == "off"
             and not bool(int(row.get("expected_closed") or 0))
         ):
             valve_ids.add(did)
@@ -1261,6 +1346,7 @@ async def dashboard(request: Request):
         )
         valve_devices, valve_counts = _decorate_valve_devices(
             list(hub_payload.get("valve_devices") or []),
+            property_cfg=pcfg,
             collected_at=hub_collected_at,
             recent_event_map=valve_event_map.get(pid) or {},
             valve_state_map=valve_state_map,
@@ -1954,14 +2040,15 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
 @app.post("/api/property/{property_id}/valves/all/{action}")
 async def api_valve_all(property_id: str, action: str,
                         _auth=Depends(_require_write_auth)):
-    """Open/close all shutoff valves for a property via Hubitat Maker API."""
+    """Turn water on/off for all shutoff valves in a property."""
     cmd = str(action or "").strip().lower()
-    if cmd not in {"open", "close"}:
-        return JSONResponse(status_code=400, content={"error": "Action must be 'open' or 'close'"})
+    if cmd not in {"on", "off", "open", "close"}:
+        return JSONResponse(status_code=400, content={"error": "Action must be 'on', 'off', 'open', or 'close'"})
 
     prop = _get_property_cfg(property_id)
     if not prop:
         return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+    property_cfg = prop.get("alerts", {}) or {}
 
     client = _hubitat_client_for_property(property_id)
     if not client:
@@ -1969,25 +2056,60 @@ async def api_valve_all(property_id: str, action: str,
 
     try:
         valves = client.get_valve_devices()
-        result = client.command_valves(cmd, valves)
+        if cmd in {"on", "off"}:
+            results = []
+            attempted = 0
+            succeeded = 0
+            for valve in valves:
+                did = str(valve.get("entity_id") or "").strip()
+                if not did:
+                    continue
+                raw_cmd = water_service.water_action_to_raw_command(cmd, property_cfg, did)
+                if raw_cmd not in {"open", "close"}:
+                    continue
+                attempted += 1
+                try:
+                    res = client.command_device(did, raw_cmd)
+                    res["friendly_name"] = valve.get("friendly_name") or did
+                    res["requested_action"] = cmd
+                    results.append(res)
+                    succeeded += 1
+                except Exception as exc:
+                    results.append({
+                        "device_id": did,
+                        "friendly_name": valve.get("friendly_name") or did,
+                        "command": raw_cmd,
+                        "requested_action": cmd,
+                        "ok": False,
+                        "error": str(exc),
+                    })
+            result = {
+                "attempted": attempted,
+                "succeeded": succeeded,
+                "failed": attempted - succeeded,
+                "results": results,
+            }
+        else:
+            result = client.command_valves(cmd, valves)
     except Exception as exc:
         _record_system_event(
             event_type="valve_command_all_failed",
             level="error",
             property_id=property_id,
             actor="api",
-            message=f"{cmd.title()} all shutoff valves failed",
+            message=f"{_valve_service_action_label(cmd)} failed for all shutoff valves",
             details={"error": str(exc)},
         )
         return JSONResponse(status_code=502, content={"error": str(exc)})
 
     _record_system_event(
         event_type="valve_command_all",
-        level="warning" if cmd == "close" else "info",
+        level="warning" if cmd in {"off", "close"} else "info",
         property_id=property_id,
         actor="api",
-        message=f"{cmd.title()} all shutoff valves requested",
+        message=f"{_valve_service_action_label(cmd)} requested for all shutoff valves",
         details={
+            "requested_action": cmd,
             "attempted": result.get("attempted"),
             "succeeded": result.get("succeeded"),
             "failed": result.get("failed"),
@@ -1996,20 +2118,30 @@ async def api_valve_all(property_id: str, action: str,
 
     attempted_ids = []
     name_hints: dict[str, str] = {}
+    expected_states: dict[str, str] = {}
+    requested_service_actions: dict[str, str] = {}
     for row in (result.get("results") or []):
         did = str(row.get("device_id") or "").strip()
         if not did:
             continue
         attempted_ids.append(did)
         name_hints[did] = str(row.get("friendly_name") or did)
+        raw_cmd = str(row.get("command") or "").strip().lower()
+        if raw_cmd in {"open", "close"}:
+            expected_states[did] = _expected_valve_state(raw_cmd)
+        if cmd in {"on", "off"}:
+            requested_service_actions[did] = cmd
+        elif raw_cmd in {"open", "close"}:
+            service_action = _raw_valve_command_service_state(property_cfg, did, raw_cmd)
+            if service_action in {"on", "off"}:
+                requested_service_actions[did] = service_action
 
     warnings: list[dict] = []
     confirmed_ids: list[str] = []
     if attempted_ids:
-        expected = _expected_valve_state(cmd)
         verify = _verify_valve_transition(
             client,
-            expected_states={did: expected for did in attempted_ids},
+            expected_states=expected_states,
             name_hints=name_hints,
             polls=4,
             wait_seconds=3,
@@ -2027,22 +2159,22 @@ async def api_valve_all(property_id: str, action: str,
         }
         confirmed_ids = [did for did in attempted_ids if did not in unresolved_ids]
 
-    if cmd == "close":
-        for did in confirmed_ids:
-            _set_valve_expected_closed(
+    for did in confirmed_ids:
+        service_action = requested_service_actions.get(did)
+        if service_action == "off":
+            _set_valve_expected_service_off(
                 property_id,
                 did,
                 friendly_name=name_hints.get(did, did),
-                expected_closed=True,
+                expected_service_off=True,
             )
-    else:
-        for did in confirmed_ids:
+        elif service_action == "on":
             _resolve_valve_incident(
                 property_id,
                 did,
                 friendly_name=name_hints.get(did, did),
                 actor="api",
-                resolution="reopened_via_api",
+                resolution="water_turned_on_via_api",
             )
 
     _schedule_collection_refresh(
@@ -2067,14 +2199,15 @@ async def api_valve_all(property_id: str, action: str,
 @app.post("/api/property/{property_id}/valves/{device_id}/{action}")
 async def api_valve_device(property_id: str, device_id: str, action: str,
                            _auth=Depends(_require_write_auth)):
-    """Open/close one shutoff valve device for a property."""
+    """Turn water on/off for one shutoff valve device."""
     cmd = str(action or "").strip().lower()
-    if cmd not in {"open", "close"}:
-        return JSONResponse(status_code=400, content={"error": "Action must be 'open' or 'close'"})
+    if cmd not in {"on", "off", "open", "close"}:
+        return JSONResponse(status_code=400, content={"error": "Action must be 'on', 'off', 'open', or 'close'"})
 
     prop = _get_property_cfg(property_id)
     if not prop:
         return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
+    property_cfg = prop.get("alerts", {}) or {}
 
     client = _hubitat_client_for_property(property_id)
     if not client:
@@ -2087,31 +2220,35 @@ async def api_valve_device(property_id: str, device_id: str, action: str,
             if str(valve.get("entity_id")) == str(device_id):
                 valve_name = valve.get("friendly_name") or device_id
                 break
-        result = client.command_device(device_id, cmd)
+        raw_cmd = water_service.water_action_to_raw_command(cmd, property_cfg, str(device_id))
+        if raw_cmd not in {"open", "close"}:
+            return JSONResponse(status_code=400, content={"error": f"Unsupported valve action '{cmd}'"})
+        result = client.command_device(device_id, raw_cmd)
     except Exception as exc:
         _record_system_event(
             event_type="valve_command_failed",
             level="error",
             property_id=property_id,
             actor="api",
-            message=f"{cmd.title()} shutoff valve failed: {valve_name}",
-            details={"device_id": str(device_id), "error": str(exc)},
+            message=f"{_valve_service_action_label(cmd)} failed: {valve_name}",
+            details={"device_id": str(device_id), "requested_action": cmd, "error": str(exc)},
         )
         return JSONResponse(status_code=502, content={"error": str(exc)})
 
     _record_system_event(
         event_type="valve_command",
-        level="warning" if cmd == "close" else "info",
+        level="warning" if cmd in {"off", "close"} else "info",
         property_id=property_id,
         actor="api",
-        message=f"{cmd.title()} shutoff valve requested: {valve_name}",
-        details={"device_id": str(device_id), "friendly_name": valve_name},
+        message=f"{_valve_service_action_label(cmd)} requested: {valve_name}",
+        details={"device_id": str(device_id), "friendly_name": valve_name, "requested_action": cmd},
     )
 
     warnings: list[dict] = []
+    expected_raw = water_service.water_action_to_raw_command(cmd, property_cfg, str(device_id))
     verify = _verify_valve_transition(
         client,
-        expected_states={str(device_id): _expected_valve_state(cmd)},
+        expected_states={str(device_id): _expected_valve_state(expected_raw)},
         name_hints={str(device_id): str(valve_name)},
         polls=4,
         wait_seconds=3,
@@ -2129,20 +2266,25 @@ async def api_valve_device(property_id: str, device_id: str, action: str,
         if str(row.get("device_id") or "").strip()
     }
     if str(device_id) not in unresolved_ids:
-        if cmd == "close":
-            _set_valve_expected_closed(
+        service_action = cmd if cmd in {"on", "off"} else _raw_valve_command_service_state(
+            property_cfg,
+            str(device_id),
+            expected_raw,
+        )
+        if service_action == "off":
+            _set_valve_expected_service_off(
                 property_id,
                 str(device_id),
                 friendly_name=valve_name,
-                expected_closed=True,
+                expected_service_off=True,
             )
-        else:
+        elif service_action == "on":
             _resolve_valve_incident(
                 property_id,
                 str(device_id),
                 friendly_name=valve_name,
                 actor="api",
-                resolution="reopened_via_api",
+                resolution="water_turned_on_via_api",
             )
 
     _schedule_collection_refresh(
@@ -2156,6 +2298,7 @@ async def api_valve_device(property_id: str, device_id: str, action: str,
         "property_id": property_id,
         "device_id": str(device_id),
         "action": cmd,
+        "raw_action": expected_raw,
         "result": result,
         "warning": (warnings[0] if warnings else None),
     })
@@ -2164,7 +2307,7 @@ async def api_valve_device(property_id: str, device_id: str, action: str,
 @app.post("/api/property/{property_id}/valves/{device_id}/ack")
 async def api_ack_valve_incident(property_id: str, device_id: str,
                                  _auth=Depends(_require_write_auth)):
-    """Acknowledge an active shutoff-valve safety incident until the valve reopens."""
+    """Acknowledge an active shutoff-valve safety incident until water turns on."""
     known_pids = {p.get("id") for p in CONFIG.get("properties", []) if p.get("id")}
     if property_id not in known_pids:
         return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
