@@ -1232,6 +1232,30 @@ BASE_DIR = os.path.dirname(__file__)
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "app/templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "app/static")), name="static")
 
+
+def _static_asset_version(rel_path: str) -> str:
+    asset_path = os.path.join(BASE_DIR, "app/static", rel_path)
+    try:
+        return str(int(os.path.getmtime(asset_path)))
+    except Exception:
+        return "0"
+
+
+def _apply_no_cache(response: Response) -> Response:
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+@app.middleware("http")
+async def disable_cache_for_live_views(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path or "/"
+    if path == "/" or path.startswith("/devices/") or path.startswith("/temperatures/") or path == "/decisions" or path.startswith("/api/"):
+        return _apply_no_cache(response)
+    return response
+
 # Register Jinja2 globals for formatting helpers
 templates.env.globals.update({
     "fmt_temp":         formatters.fmt_temp,
@@ -1506,6 +1530,7 @@ async def dashboard(request: Request):
         "alerts":  alerts,
         "container_health": container_health,
         "config":  CONFIG,
+        "static_version": _static_asset_version("css/monitor-ui.css"),
     })
 
 
@@ -1553,6 +1578,7 @@ async def device_activity(request: Request, property_id: str):
         "crit_mins":     crit_mins,
         "counts":        counts,
         "config":        CONFIG,
+        "static_version": _static_asset_version("css/monitor-ui.css"),
     })
 
 
@@ -1613,6 +1639,7 @@ async def all_temperatures(request: Request, property_id: str, sensor: str = "")
         "request": request,
         "prop": prop,
         "config": CONFIG,
+        "static_version": _static_asset_version("css/monitor-ui.css"),
         "latest_collected_at": row.get("collected_at") if row else None,
         "graph_hours": graph_hours,
         "sensors": sensors,
@@ -1675,6 +1702,7 @@ async def system_decisions(request: Request,
     return templates.TemplateResponse("system_decisions.html", {
         "request": request,
         "config": CONFIG,
+        "static_version": _static_asset_version("css/monitor-ui.css"),
         "events": events,
         "filters": {
             "level": level_filter or "",

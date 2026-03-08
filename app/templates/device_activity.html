@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ request.url_for('static', path='css/monitor-ui.css') }}">
+  <link rel="stylesheet" href="{{ request.url_for('static', path='css/monitor-ui.css') }}?v={{ static_version }}">
   <meta http-equiv="refresh" content="60">
   <style>
     .row-critical { border-left: 3px solid #ef4444; }
