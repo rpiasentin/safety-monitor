@@ -51,9 +51,12 @@
         class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium"
         title="Alert rule settings">Rules</button>
     </div>
-    <div class="header-property-row">
+    <div id="header-property-row" class="header-property-row">
       {% for card in cards %}
-      <a href="#prop-{{ card.id }}" class="header-property-link {% if card.alert_count > 0 %}is-alert{% endif %}" title="Jump to {{ card.name }}">
+      <a href="#prop-{{ card.id }}"
+        data-property-id="{{ card.id }}"
+        class="header-property-link {% if card.alert_count > 0 %}is-alert{% endif %}"
+        title="Jump to {{ card.name }}">
         <span class="header-property-label">{{ card.name }}</span>
         {% if card.alert_count > 0 %}
           <span class="header-property-badge">{{ card.alert_count }}</span>
@@ -1096,9 +1099,12 @@
     setInterval(updateClock, 1000);
 
     const AUTO_REFRESH_MS = 60_000;
+    const MOBILE_PROPERTY_MEDIA = window.matchMedia('(max-width: 860px)');
+    const PROPERTY_SELECTION_KEY = 'safety-monitor.selected-property';
     let refreshInFlight = false;
     let refreshQueued = false;
     let refreshQueuedFull = false;
+    let selectedPropertyId = '';
 
     function isSettingsOpen() {
       const panel = document.getElementById('settings-panel');
@@ -1172,6 +1178,140 @@
       }
     }
 
+    function getPropertyCards() {
+      return Array.from(document.querySelectorAll('#property-grid .property-card[id^="prop-"]'));
+    }
+
+    function getPropertyLinks() {
+      return Array.from(document.querySelectorAll('#header-property-row .header-property-link[data-property-id]'));
+    }
+
+    function availablePropertyIds() {
+      return getPropertyCards()
+        .map(card => String(card.id || '').replace(/^prop-/, ''))
+        .filter(Boolean);
+    }
+
+    function normalizePropertyId(value) {
+      const candidate = String(value || '').trim();
+      if (!candidate) return '';
+      const ids = new Set(availablePropertyIds());
+      return ids.has(candidate) ? candidate : '';
+    }
+
+    function propertyIdFromHash(hash = window.location.hash) {
+      const match = String(hash || '').match(/^#prop-([A-Za-z0-9_-]+)/);
+      return match ? normalizePropertyId(match[1]) : '';
+    }
+
+    function defaultSelectedPropertyId() {
+      const ids = availablePropertyIds();
+      if (!ids.length) return '';
+      const alertLink = getPropertyLinks().find(link => link.classList.contains('is-alert'));
+      return normalizePropertyId(alertLink?.dataset.propertyId) || ids[0];
+    }
+
+    function getStoredPropertyId() {
+      try {
+        return normalizePropertyId(localStorage.getItem(PROPERTY_SELECTION_KEY));
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function storeSelectedPropertyId(propertyId) {
+      if (!propertyId) return;
+      try {
+        localStorage.setItem(PROPERTY_SELECTION_KEY, propertyId);
+      } catch (e) {
+        // Ignore storage failures in private browsing or restricted environments.
+      }
+    }
+
+    function isMobilePropertyMode() {
+      return !!MOBILE_PROPERTY_MEDIA.matches;
+    }
+
+    function updatePropertyHash(propertyId) {
+      if (!propertyId) return;
+      const nextHash = `#prop-${propertyId}`;
+      if (window.location.hash === nextHash) return;
+      const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
+      history.replaceState(null, '', nextUrl);
+    }
+
+    function applySelectedPropertyState(propertyId, options = {}) {
+      const {
+        persist = true,
+        syncHash = true,
+        scroll = false,
+      } = options;
+
+      const resolved = normalizePropertyId(propertyId)
+        || selectedPropertyId
+        || propertyIdFromHash()
+        || getStoredPropertyId()
+        || defaultSelectedPropertyId();
+
+      selectedPropertyId = resolved || '';
+      document.body.classList.toggle('mobile-property-focus', isMobilePropertyMode() && !!selectedPropertyId);
+
+      getPropertyCards().forEach(card => {
+        const isSelected = card.id === `prop-${selectedPropertyId}`;
+        card.classList.toggle('is-selected-property', isSelected);
+      });
+
+      getPropertyLinks().forEach(link => {
+        const isSelected = String(link.dataset.propertyId || '') === selectedPropertyId;
+        link.classList.toggle('is-selected', isSelected);
+        if (isSelected) {
+          link.setAttribute('aria-current', 'page');
+        } else {
+          link.removeAttribute('aria-current');
+        }
+      });
+
+      if (persist && selectedPropertyId) {
+        storeSelectedPropertyId(selectedPropertyId);
+      }
+      if (syncHash && selectedPropertyId) {
+        updatePropertyHash(selectedPropertyId);
+      }
+      if (scroll && selectedPropertyId) {
+        const target = document.getElementById(`prop-${selectedPropertyId}`);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+      return selectedPropertyId;
+    }
+
+    function bindPropertyNavigation() {
+      getPropertyLinks().forEach(link => {
+        if (link.dataset.bound === '1') return;
+        link.dataset.bound = '1';
+        link.addEventListener('click', event => {
+          const propertyId = normalizePropertyId(link.dataset.propertyId);
+          if (!propertyId) return;
+          if (isMobilePropertyMode()) {
+            event.preventDefault();
+            applySelectedPropertyState(propertyId, { persist: true, syncHash: true, scroll: true });
+            return;
+          }
+          applySelectedPropertyState(propertyId, { persist: true, syncHash: true, scroll: false });
+        });
+      });
+    }
+
+    function refreshPropertySelectionState(options = {}) {
+      bindPropertyNavigation();
+      applySelectedPropertyState(selectedPropertyId || propertyIdFromHash(), {
+        persist: true,
+        syncHash: true,
+        scroll: !!options.scroll,
+      });
+    }
+
     async function refreshDashboard(reason = 'timer', force = false, full = false) {
       if (refreshInFlight) {
         refreshQueued = true;
@@ -1208,12 +1348,14 @@
         const nextDoc = new DOMParser().parseFromString(html, 'text/html');
         document.body.classList.add('live-refreshing');
         replaceSectionFromDoc('#header-alert-chip', nextDoc);
+        replaceSectionFromDoc('#header-property-row', nextDoc);
         replaceSectionFromDoc('#alerts-wrapper', nextDoc);
         if (full) {
           replaceSectionFromDoc('#summary-section', nextDoc);
           replaceSectionFromDoc('#container-health-section', nextDoc);
           replaceSectionFromDoc('#property-grid', nextDoc);
         }
+        refreshPropertySelectionState({ scroll: false });
         const stamp = new Date().toLocaleTimeString('en-US', {
           hour: '2-digit',
           minute: '2-digit',
@@ -1244,6 +1386,18 @@
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) queueDashboardRefresh('resume', false);
     });
+    if (typeof MOBILE_PROPERTY_MEDIA.addEventListener === 'function') {
+      MOBILE_PROPERTY_MEDIA.addEventListener('change', () => refreshPropertySelectionState({ scroll: false }));
+    } else if (typeof MOBILE_PROPERTY_MEDIA.addListener === 'function') {
+      MOBILE_PROPERTY_MEDIA.addListener(() => refreshPropertySelectionState({ scroll: false }));
+    }
+    window.addEventListener('hashchange', () => {
+      const propertyId = propertyIdFromHash();
+      if (propertyId) {
+        applySelectedPropertyState(propertyId, { persist: true, syncHash: false, scroll: false });
+      }
+    });
+    refreshPropertySelectionState({ scroll: false });
 
     async function loadMakerDevices(pid) {
       const container = document.getElementById(`${pid}_maker_device_list`);
