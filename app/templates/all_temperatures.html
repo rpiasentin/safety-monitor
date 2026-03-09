@@ -36,6 +36,7 @@
       <span>Latest sample: {{ ago(latest_collected_at) }}</span>
       {% endif %}
       <span>Sensors: {{ sensors|length }}</span>
+      <span>Times shown in local browser time</span>
     </div>
 
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-5">
@@ -111,7 +112,18 @@
 
     {% if selected_sensor and graph_values and graph_values|length > 1 %}
     (() => {
-      const labels = {{ graph_labels | tojson }};
+      const rawLabels = {{ graph_labels | tojson }};
+      const formatLocalGraphTime = (value) => {
+        const stamp = new Date(value);
+        if (Number.isNaN(stamp.getTime())) return value;
+        return stamp.toLocaleString('en-US', {
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+      };
+      const labels = rawLabels.map(formatLocalGraphTime);
       const values = {{ graph_values | tojson }};
       const ctx = document.getElementById('tempChart');
       if (!ctx) return;
