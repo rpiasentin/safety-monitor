@@ -1651,6 +1651,14 @@ async def all_temperatures(request: Request, property_id: str, sensor: str = "")
 
     pcfg = prop.get("alerts", {})
     global_temp = (CONFIG.get("alerts", {}) or {}).get("temperature", {})
+    primary_sensor = next(
+        (
+            str(c.get("primary_temp_sensor", "")).strip()
+            for c in prop.get("collectors", [])
+            if c.get("primary_temp_sensor")
+        ),
+        "",
+    )
     try:
         graph_hours = int(float(pcfg.get("temp_graph_hours", global_temp.get("graph_hours", 24))))
     except Exception:
@@ -1659,9 +1667,11 @@ async def all_temperatures(request: Request, property_id: str, sensor: str = "")
 
     outdoors = {str(s).strip().lower() for s in (pcfg.get("outdoor_sensors") or [])}
     excludes = {str(s).strip().lower() for s in (pcfg.get("exclude_sensors") or [])}
+    sensor_lookup: dict[str, str] = {}
     sensors = []
     for name in sorted(all_temps.keys(), key=lambda s: s.lower()):
         key = str(name).strip().lower()
+        sensor_lookup[key] = name
         cls = "excluded" if key in excludes else ("outdoor" if key in outdoors else "indoor")
         sensors.append({
             "name": name,
@@ -1670,8 +1680,12 @@ async def all_temperatures(request: Request, property_id: str, sensor: str = "")
         })
 
     selected_sensor = ""
-    if sensor and sensor in all_temps:
-        selected_sensor = sensor
+    requested_sensor = sensor_lookup.get(str(sensor or "").strip().lower(), "")
+    configured_primary_sensor = sensor_lookup.get(primary_sensor.lower(), "")
+    if requested_sensor:
+        selected_sensor = requested_sensor
+    elif configured_primary_sensor:
+        selected_sensor = configured_primary_sensor
     elif sensors:
         selected_sensor = sensors[0]["name"]
 
