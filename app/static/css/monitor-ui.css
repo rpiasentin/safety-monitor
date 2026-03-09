@@ -408,6 +408,72 @@
   border-radius: var(--radius-md);
 }
 
+.settings-card-head {
+  flex-wrap: wrap;
+}
+
+.settings-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.rules-save-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 0.18rem 0.62rem;
+  border: 1px solid rgba(145, 183, 217, 0.28);
+  background: rgba(20, 41, 62, 0.62);
+  color: #b4c7d8;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.rules-save-status.is-pending {
+  border-color: rgba(107, 179, 236, 0.48);
+  background: rgba(32, 74, 108, 0.46);
+  color: #c8e7ff;
+}
+
+.rules-save-status.is-success {
+  border-color: rgba(69, 219, 166, 0.56);
+  background: rgba(24, 86, 63, 0.42);
+  color: #a7f3d7;
+}
+
+.rules-save-status.is-error {
+  border-color: rgba(249, 126, 136, 0.62);
+  background: rgba(103, 35, 44, 0.44);
+  color: #ffd0d5;
+}
+
+.rules-save-btn {
+  min-width: 72px;
+}
+
+.rules-save-btn.is-pending {
+  background: #2563eb !important;
+}
+
+.rules-save-btn.is-success {
+  background: #15803d !important;
+}
+
+.rules-save-btn.is-error {
+  background: #b91c1c !important;
+}
+
+.monitor-subcard.rules-save-success {
+  border-color: rgba(69, 219, 166, 0.54);
+  box-shadow: 0 0 0 1px rgba(69, 219, 166, 0.16), 0 10px 28px rgba(11, 42, 32, 0.22);
+}
+
 .monitor-settings .bg-gray-700,
 .monitor-settings .bg-gray-700\/40 {
   background-color: rgba(40, 62, 90, 0.72) !important;

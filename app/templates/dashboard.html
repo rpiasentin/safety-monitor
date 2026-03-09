@@ -121,13 +121,16 @@
         </div>
         <div class="p-5 grid grid-cols-1 md:grid-cols-2 gap-4">
           {% for card in cards %}
-          <div class="bg-gray-800 rounded-xl p-4 monitor-subcard">
-            <div class="flex items-center justify-between mb-3">
+          <div id="{{ card.id }}_settings_card" class="bg-gray-800 rounded-xl p-4 monitor-subcard">
+            <div class="flex items-center justify-between gap-3 mb-3 settings-card-head">
               <h3 class="font-semibold text-white">{{ card.name }}</h3>
-              <button onclick="saveThresholds('{{ card.id }}')"
-                class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors">
-                Save
-              </button>
+              <div class="settings-card-actions">
+                <div id="{{ card.id }}_status" class="rules-save-status hidden" aria-live="polite"></div>
+                <button id="{{ card.id }}_save_btn" onclick="saveThresholds('{{ card.id }}')"
+                  class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors rules-save-btn">
+                  Save
+                </button>
+              </div>
             </div>
             <div class="mb-3 rounded-lg border border-gray-700 bg-gray-700/40 p-2">
               <p class="text-xs text-gray-400 mb-2">Clear Active Alerts</p>
@@ -399,7 +402,6 @@
                 </div>
               </div>
             </div>
-            <div id="{{ card.id }}_status" class="mt-2 text-xs hidden"></div>
           </div>
           {% endfor %}
         </div>
@@ -1852,6 +1854,64 @@
       }
     }
 
+    function setRulesSaveState(pid, tone, message, buttonLabel = 'Save') {
+      const statusEl = document.getElementById(`${pid}_status`);
+      const saveBtn = document.getElementById(`${pid}_save_btn`);
+      const cardEl = document.getElementById(`${pid}_settings_card`);
+      if (!statusEl || !saveBtn || !cardEl) return;
+
+      const timeoutId = Number(statusEl.dataset.dismissTimer || 0);
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+        delete statusEl.dataset.dismissTimer;
+      }
+
+      statusEl.classList.remove('hidden', 'is-pending', 'is-success', 'is-error');
+      saveBtn.classList.remove('is-pending', 'is-success', 'is-error');
+      cardEl.classList.remove('rules-save-success');
+
+      if (tone === 'pending') {
+        statusEl.classList.add('is-pending');
+        saveBtn.classList.add('is-pending');
+        saveBtn.disabled = true;
+      } else if (tone === 'success') {
+        statusEl.classList.add('is-success');
+        saveBtn.classList.add('is-success');
+        cardEl.classList.add('rules-save-success');
+        saveBtn.disabled = false;
+      } else if (tone === 'error') {
+        statusEl.classList.add('is-error');
+        saveBtn.classList.add('is-error');
+        saveBtn.disabled = false;
+      } else {
+        statusEl.classList.add('hidden');
+        saveBtn.disabled = false;
+      }
+
+      if (tone !== 'idle') {
+        statusEl.textContent = message;
+      }
+      saveBtn.textContent = buttonLabel;
+    }
+
+    function scheduleRulesSaveStateReset(pid, delayMs = 5000) {
+      const statusEl = document.getElementById(`${pid}_status`);
+      const saveBtn = document.getElementById(`${pid}_save_btn`);
+      const cardEl = document.getElementById(`${pid}_settings_card`);
+      if (!statusEl || !saveBtn || !cardEl) return;
+
+      const timeoutId = window.setTimeout(() => {
+        statusEl.classList.add('hidden');
+        statusEl.classList.remove('is-pending', 'is-success', 'is-error');
+        saveBtn.classList.remove('is-pending', 'is-success', 'is-error');
+        saveBtn.textContent = 'Save';
+        saveBtn.disabled = false;
+        cardEl.classList.remove('rules-save-success');
+        delete statusEl.dataset.dismissTimer;
+      }, delayMs);
+      statusEl.dataset.dismissTimer = String(timeoutId);
+    }
+
     // Save thresholds for a property
     async function saveThresholds(pid) {
       const g = id => document.getElementById(`${pid}_${id}`)?.value?.trim() ?? '';
@@ -1902,10 +1962,7 @@
         suppress_maker_devices:             suppressMakerDevices,
       };
 
-      const statusEl = document.getElementById(`${pid}_status`);
-      statusEl.classList.remove('hidden', 'text-green-400', 'text-red-400');
-      statusEl.textContent = 'Saving…';
-      statusEl.classList.add('text-gray-400');
+      setRulesSaveState(pid, 'pending', 'Saving live rules…', 'Saving…');
       try {
         const resp = await fetch(`/api/config/thresholds/${pid}`, {
           method: 'POST',
@@ -1913,8 +1970,7 @@
           body: JSON.stringify(payload),
         });
         if (resp.ok) {
-          statusEl.textContent = '✓ Saved';
-          statusEl.classList.replace('text-gray-400', 'text-green-400');
+          setRulesSaveState(pid, 'success', 'Saved live rules', 'Saved');
           // Update data-* so re-opening shows updated state
           const container = document.getElementById(`${pid}_sensor_list`);
           if (container) {
@@ -1925,16 +1981,16 @@
           if (makerContainer) makerContainer.dataset.suppressed = JSON.stringify(suppressMakerDevices);
           const selEl = document.getElementById(`${pid}_primary_sensor`);
           if (selEl) selEl.dataset.current = primarySensor;
+          scheduleRulesSaveStateReset(pid, 5000);
         } else {
           const err = await resp.json();
-          statusEl.textContent = `✗ Error: ${err.error || resp.status}`;
-          statusEl.classList.replace('text-gray-400', 'text-red-400');
+          setRulesSaveState(pid, 'error', `Save failed: ${err.error || resp.status}`, 'Retry');
+          scheduleRulesSaveStateReset(pid, 7000);
         }
       } catch (e) {
-        statusEl.textContent = `✗ ${e.message}`;
-        statusEl.classList.replace('text-gray-400', 'text-red-400');
+        setRulesSaveState(pid, 'error', `Save failed: ${e.message}`, 'Retry');
+        scheduleRulesSaveStateReset(pid, 7000);
       }
-      setTimeout(() => statusEl.classList.add('hidden'), 4000);
     }
   </script>
 
