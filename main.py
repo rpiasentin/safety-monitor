@@ -581,8 +581,9 @@ def _valve_event_label(event_type: str,
 def _verify_lock_transition(client: HubitatCloudClient,
                             expected_states: dict[str, str],
                             name_hints: dict[str, str] | None = None,
-                            polls: int = 4,
-                            wait_seconds: int = 3) -> dict:
+                            polls: int = 2,
+                            wait_seconds: int = 3,
+                            initial_delay_seconds: int = 15) -> dict:
     """
     Poll Hubitat lock states after a command and report devices that did not
     transition to the expected state.
@@ -601,6 +602,10 @@ def _verify_lock_transition(client: HubitatCloudClient,
 
     polls = max(1, int(polls))
     wait_seconds = max(1, int(wait_seconds))
+    initial_delay_seconds = max(0, int(initial_delay_seconds))
+
+    if initial_delay_seconds > 0:
+        time.sleep(initial_delay_seconds)
 
     for attempt in range(polls):
         if attempt > 0:
@@ -669,8 +674,9 @@ def _verify_valve_transition(client: HubitatCloudClient,
                              property_id: str,
                              expected_states: dict[str, str],
                              name_hints: dict[str, str] | None = None,
-                             polls: int = 4,
-                             wait_seconds: int = 3) -> dict:
+                             polls: int = 2,
+                             wait_seconds: int = 3,
+                             initial_delay_seconds: int = 15) -> dict:
     """
     Poll Hubitat water-cutoff states after a command and report devices that did not
     transition to the expected state.
@@ -689,6 +695,10 @@ def _verify_valve_transition(client: HubitatCloudClient,
 
     polls = max(1, int(polls))
     wait_seconds = max(1, int(wait_seconds))
+    initial_delay_seconds = max(0, int(initial_delay_seconds))
+
+    if initial_delay_seconds > 0:
+        time.sleep(initial_delay_seconds)
 
     for attempt in range(polls):
         if attempt > 0:
@@ -2021,8 +2031,9 @@ async def api_lock_all(property_id: str, action: str,
             client,
             expected_states={did: expected for did in attempted_ids},
             name_hints=name_hints,
-            polls=4,
+            polls=2,
             wait_seconds=3,
+            initial_delay_seconds=15,
         )
         if not verify.get("ok"):
             warnings = _record_lock_state_unchanged(
@@ -2101,8 +2112,9 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
         client,
         expected_states={str(device_id): _expected_lock_state(cmd)},
         name_hints={str(device_id): str(lock_name)},
-        polls=4,
+        polls=2,
         wait_seconds=3,
+        initial_delay_seconds=15,
     )
     if not verify.get("ok"):
         warnings = _record_lock_state_unchanged(
@@ -2234,8 +2246,9 @@ async def api_valve_all(property_id: str, action: str,
             property_id,
             expected_states=expected_states,
             name_hints=name_hints,
-            polls=4,
+            polls=2,
             wait_seconds=3,
+            initial_delay_seconds=15,
         )
         if not verify.get("ok"):
             warnings = _record_valve_state_unchanged(
@@ -2347,8 +2360,9 @@ async def api_valve_device(property_id: str, device_id: str, action: str,
         property_id,
         expected_states={str(device_id): _expected_valve_state(expected_raw)},
         name_hints={str(device_id): str(valve_name)},
-        polls=4,
+        polls=2,
         wait_seconds=3,
+        initial_delay_seconds=15,
     )
     if not verify.get("ok"):
         warnings = _record_valve_state_unchanged(
