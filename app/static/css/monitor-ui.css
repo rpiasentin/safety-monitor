@@ -485,31 +485,6 @@
   border-color: rgba(145, 183, 217, 0.24) !important;
 }
 
-.monitor-settings-sticky {
-  position: sticky;
-  top: 0;
-  z-index: 6;
-  background: linear-gradient(180deg, rgba(17, 31, 49, 0.98), rgba(14, 27, 42, 0.94));
-  backdrop-filter: blur(12px);
-}
-
-.settings-header-nav {
-  padding-bottom: 0.18rem;
-}
-
-.settings-property-row {
-  padding-bottom: 0.08rem;
-}
-
-.settings-nav-current {
-  background: rgba(22, 86, 90, 0.42);
-  border-color: rgba(94, 201, 202, 0.48);
-}
-
-.settings-card-anchor {
-  scroll-margin-top: 180px;
-}
-
 .monitor-settings input,
 .monitor-settings select,
 .monitor-settings textarea {
@@ -1336,10 +1311,6 @@
   .monitor-settings-wrap:not(.hidden) > .monitor-settings {
     height: 100%;
     overflow-y: auto;
-  }
-
-  .settings-card-anchor {
-    scroll-margin-top: 210px;
   }
 
   .dashboard-page.settings-open .mobile-thumb-dock {
