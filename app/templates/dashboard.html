@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   {% set app_title = config.get('web', {}).get('title', 'Safety Monitor') %}
-  <title>{{ app_title }}</title>
+  {% set page_view = page_view|default('summary') %}
+  <title>{% if shell and (shell.scope_label != 'System' or page_view != 'summary') %}{{ shell.scope_label }} · {{ page_view|title }} · {% endif %}{{ app_title }}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -17,49 +18,54 @@
 <body class="bg-gray-950 text-gray-100 min-h-screen monitor-body dashboard-page">
 
   <!-- Header -->
+  {% set page_view = page_view|default('summary') %}
   {% set total_alerts = alerts|length %}
   {% set dashboard_title = '07PLUS02 LLC SM' %}
   <header id="dashboard-top" class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 monitor-header monitor-dashboard-header">
     <div class="header-title-row">
       <h1 class="header-title text-white tracking-tight">{{ dashboard_title }}</h1>
+      {% if shell and (shell.scope_label != 'System' or page_view != 'summary') %}
+      <span class="monitor-chip monitor-status-chip rounded-full">{{ shell.scope_label }} · {{ page_view|title }}</span>
+      {% endif %}
     </div>
     <div class="header-status-row">
       <span id="clock" class="monitor-chip monitor-clock font-mono tabular-nums rounded-full">--:--:--</span>
-      <span id="live-refresh-status" class="monitor-chip monitor-status-chip rounded-full">updated every 60s</span>
+      <span id="live-refresh-status" class="monitor-chip monitor-status-chip rounded-full">
+        {% if page_view == 'summary' %}updated every 60s{% else %}view refresh 60s{% endif %}
+      </span>
     </div>
     <div class="header-nav-row">
-      <a href="#summary-section"
-        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium"
-        title="Jump to summary">Summary</a>
+      <a href="{{ shell.view_urls.summary }}"
+        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium {% if page_view == 'summary' %}is-current{% endif %}"
+        title="Summary view">Summary</a>
       {% if total_alerts > 0 %}
-        <a id="header-alert-chip" href="#alerts-wrapper"
+        <a id="header-alert-chip" href="{{ shell.alerts_url }}"
           class="monitor-chip header-nav-btn header-alert-link bg-red-600 text-white font-semibold"
           title="Jump to active alerts">
           {{ total_alerts }} alert{{ 's' if total_alerts != 1 }}
         </a>
       {% else %}
-        <a id="header-alert-chip" href="#alerts-wrapper"
+        <a id="header-alert-chip" href="{{ shell.alerts_url }}"
           class="monitor-chip header-nav-btn header-alert-link bg-green-900 text-green-300 font-semibold"
           title="Jump to alerts">
           All clear
         </a>
       {% endif %}
-      <a href="/decisions"
-        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium"
+      <a href="{{ shell.view_urls.decisions }}"
+        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium {% if page_view == 'decisions' %}is-current{% endif %}"
         title="Critical system decisions log">Decisions</a>
-      <button onclick="toggleSettings()" id="settings-btn"
-        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium"
-        title="Alert rule settings">Rules</button>
+      <a href="{{ shell.view_urls.rules }}" id="settings-btn"
+        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium {% if page_view == 'rules' %}is-current{% endif %}"
+        title="Alert rule settings">Rules</a>
     </div>
     <div id="header-property-row" class="header-property-row">
-      {% for card in cards %}
-      <a href="#prop-{{ card.id }}"
-        data-property-id="{{ card.id }}"
-        class="header-property-link {% if card.alert_count > 0 %}is-alert{% endif %}"
-        title="Jump to {{ card.name }}">
-        <span class="header-property-label">{{ card.name }}</span>
-        {% if card.alert_count > 0 %}
-          <span class="header-property-badge">{{ card.alert_count }}</span>
+      {% for link in shell.property_links %}
+      <a href="{{ link.url }}"
+        class="header-property-link {% if link.alert_count > 0 %}is-alert{% endif %} {% if link.is_current %}is-selected{% endif %}"
+        title="Jump to {{ link.name }} {{ page_view }}">
+        <span class="header-property-label">{{ link.name }}</span>
+        {% if link.alert_count > 0 %}
+          <span class="header-property-badge">{{ link.alert_count }}</span>
         {% endif %}
       </a>
       {% endfor %}
@@ -67,6 +73,7 @@
   </header>
 
   <main class="px-4 pb-8 pt-6 sm:px-6 max-w-7xl mx-auto monitor-main">
+    {% if page_view == 'summary' %}
     {% set summary = namespace(reporting=0, temp_critical=0, temp_warning=0, total_devices=0) %}
     {% for card in cards %}
       {% if card.reading %}{% set summary.reporting = summary.reporting + 1 %}{% endif %}
@@ -107,13 +114,14 @@
       </div>
 
     </section>
+    {% endif %}
 
-    <!-- Settings panel (hidden by default, toggled via Alert Rules button in header) -->
-    <div id="settings-panel" class="hidden mb-8 monitor-settings-wrap">
+    {% if page_view == 'rules' %}
+    <div id="settings-panel" class="mb-8">
       <div class="bg-gray-900 rounded-2xl border border-blue-800 overflow-hidden monitor-card monitor-settings">
         <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
           <h2 class="text-base font-bold text-white">⚙ Alert Rules — per property</h2>
-          <button onclick="toggleSettings()" class="text-gray-500 hover:text-white text-sm settings-close-btn">✕ Close</button>
+          <a href="{{ shell.view_urls.summary }}" class="monitor-button monitor-mini-button header-nav-btn text-gray-100 hover:text-white settings-close-btn">Back to Summary</a>
         </div>
         <div class="px-5 py-3 border-b border-gray-800 text-xs text-gray-400">
           This panel controls the live rules used by dashboard badges and Pushover alerts:
@@ -407,8 +415,10 @@
         </div>
       </div>
     </div>
+    {% endif %}
 
     <!-- Property cards grid -->
+    {% if page_view == 'summary' %}
     <div id="property-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 property-grid">
       {% for card in cards %}
       <div id="prop-{{ card.id }}" class="bg-gray-900 rounded-2xl border {% if card.alert_count > 0 %}border-red-700{% else %}border-gray-800{% endif %} overflow-hidden monitor-card property-card">
@@ -944,8 +954,10 @@
       </div><!-- /card -->
       {% endfor %}
     </div><!-- /grid -->
+    {% endif %}
 
     <!-- Recent alerts -->
+    {% if page_view == 'summary' %}
     <section id="alerts-wrapper">
       {% if alerts %}
       <div id="alerts-section" class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden monitor-card monitor-alerts">
@@ -1006,8 +1018,9 @@
       </div>
       {% endif %}
     </section>
+    {% endif %}
 
-    {% if container_health %}
+    {% if page_view == 'summary' and container_health %}
     <section id="container-health-section" class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden mt-8 monitor-card">
       <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between gap-3">
         <h2 class="text-base font-bold text-white">Container Health</h2>
@@ -1100,18 +1113,11 @@
     updateClock();
     setInterval(updateClock, 1000);
 
+    {% if page_view == 'summary' %}
     const AUTO_REFRESH_MS = 60_000;
-    const MOBILE_PROPERTY_MEDIA = window.matchMedia('(max-width: 860px)');
-    const PROPERTY_SELECTION_KEY = 'safety-monitor.selected-property';
     let refreshInFlight = false;
     let refreshQueued = false;
     let refreshQueuedFull = false;
-    let selectedPropertyId = '';
-
-    function isSettingsOpen() {
-      const panel = document.getElementById('settings-panel');
-      return !!panel && !panel.classList.contains('hidden');
-    }
 
     function setRefreshStatus(message, tone = 'muted') {
       const el = document.getElementById('live-refresh-status');
@@ -1180,150 +1186,10 @@
       }
     }
 
-    function getPropertyCards() {
-      return Array.from(document.querySelectorAll('#property-grid .property-card[id^="prop-"]'));
-    }
-
-    function getPropertyLinks() {
-      return Array.from(document.querySelectorAll('#header-property-row .header-property-link[data-property-id]'));
-    }
-
-    function availablePropertyIds() {
-      return getPropertyCards()
-        .map(card => String(card.id || '').replace(/^prop-/, ''))
-        .filter(Boolean);
-    }
-
-    function normalizePropertyId(value) {
-      const candidate = String(value || '').trim();
-      if (!candidate) return '';
-      const ids = new Set(availablePropertyIds());
-      return ids.has(candidate) ? candidate : '';
-    }
-
-    function propertyIdFromHash(hash = window.location.hash) {
-      const match = String(hash || '').match(/^#prop-([A-Za-z0-9_-]+)/);
-      return match ? normalizePropertyId(match[1]) : '';
-    }
-
-    function defaultSelectedPropertyId() {
-      const ids = availablePropertyIds();
-      if (!ids.length) return '';
-      const alertLink = getPropertyLinks().find(link => link.classList.contains('is-alert'));
-      return normalizePropertyId(alertLink?.dataset.propertyId) || ids[0];
-    }
-
-    function getStoredPropertyId() {
-      try {
-        return normalizePropertyId(localStorage.getItem(PROPERTY_SELECTION_KEY));
-      } catch (e) {
-        return '';
-      }
-    }
-
-    function storeSelectedPropertyId(propertyId) {
-      if (!propertyId) return;
-      try {
-        localStorage.setItem(PROPERTY_SELECTION_KEY, propertyId);
-      } catch (e) {
-        // Ignore storage failures in private browsing or restricted environments.
-      }
-    }
-
-    function isMobilePropertyMode() {
-      return !!MOBILE_PROPERTY_MEDIA.matches;
-    }
-
-    function updatePropertyHash(propertyId) {
-      if (!propertyId) return;
-      const nextHash = `#prop-${propertyId}`;
-      if (window.location.hash === nextHash) return;
-      const nextUrl = `${window.location.pathname}${window.location.search}${nextHash}`;
-      history.replaceState(null, '', nextUrl);
-    }
-
-    function applySelectedPropertyState(propertyId, options = {}) {
-      const {
-        persist = true,
-        syncHash = true,
-        scroll = false,
-      } = options;
-
-      const resolved = normalizePropertyId(propertyId)
-        || selectedPropertyId
-        || propertyIdFromHash()
-        || getStoredPropertyId()
-        || defaultSelectedPropertyId();
-
-      selectedPropertyId = resolved || '';
-      document.body.classList.toggle('mobile-property-focus', isMobilePropertyMode() && !!selectedPropertyId);
-
-      getPropertyCards().forEach(card => {
-        const isSelected = card.id === `prop-${selectedPropertyId}`;
-        card.classList.toggle('is-selected-property', isSelected);
-      });
-
-      getPropertyLinks().forEach(link => {
-        const isSelected = String(link.dataset.propertyId || '') === selectedPropertyId;
-        link.classList.toggle('is-selected', isSelected);
-        if (isSelected) {
-          link.setAttribute('aria-current', 'page');
-        } else {
-          link.removeAttribute('aria-current');
-        }
-      });
-
-      if (persist && selectedPropertyId) {
-        storeSelectedPropertyId(selectedPropertyId);
-      }
-      if (syncHash && selectedPropertyId) {
-        updatePropertyHash(selectedPropertyId);
-      }
-      if (scroll && selectedPropertyId) {
-        const target = document.getElementById(`prop-${selectedPropertyId}`);
-        if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      }
-      return selectedPropertyId;
-    }
-
-    function bindPropertyNavigation() {
-      getPropertyLinks().forEach(link => {
-        if (link.dataset.bound === '1') return;
-        link.dataset.bound = '1';
-        link.addEventListener('click', event => {
-          const propertyId = normalizePropertyId(link.dataset.propertyId);
-          if (!propertyId) return;
-          if (isMobilePropertyMode()) {
-            event.preventDefault();
-            applySelectedPropertyState(propertyId, { persist: true, syncHash: true, scroll: true });
-            return;
-          }
-          applySelectedPropertyState(propertyId, { persist: true, syncHash: true, scroll: false });
-        });
-      });
-    }
-
-    function refreshPropertySelectionState(options = {}) {
-      bindPropertyNavigation();
-      applySelectedPropertyState(selectedPropertyId || propertyIdFromHash(), {
-        persist: true,
-        syncHash: true,
-        scroll: !!options.scroll,
-      });
-    }
-
     async function refreshDashboard(reason = 'timer', force = false, full = false) {
       if (refreshInFlight) {
         refreshQueued = true;
         refreshQueuedFull = refreshQueuedFull || !!full;
-        return;
-      }
-      if (!force && isSettingsOpen()) {
-        refreshQueued = true;
-        refreshQueuedFull = refreshQueuedFull || !!full;
-        setRefreshStatus('live update paused while editing', 'warning');
         return;
       }
 
@@ -1340,7 +1206,9 @@
       refreshInFlight = true;
       setRefreshStatus(reason === 'timer' ? 'syncing live data…' : 'updating…', 'muted');
       try {
-        const resp = await fetch(`/?_refresh=${Date.now()}`, {
+        const refreshUrl = new URL(window.location.href);
+        refreshUrl.searchParams.set('_refresh', Date.now());
+        const resp = await fetch(refreshUrl.toString(), {
           method: 'GET',
           cache: 'no-store',
           headers: { 'X-Requested-With': 'dashboard-soft-refresh' },
@@ -1357,7 +1225,6 @@
           replaceSectionFromDoc('#container-health-section', nextDoc);
           replaceSectionFromDoc('#property-grid', nextDoc);
         }
-        refreshPropertySelectionState({ scroll: false });
         const stamp = new Date().toLocaleTimeString('en-US', {
           hour: '2-digit',
           minute: '2-digit',
@@ -1369,7 +1236,7 @@
       } finally {
         refreshInFlight = false;
         document.body.classList.remove('live-refreshing');
-        if (refreshQueued && !isSettingsOpen()) {
+        if (refreshQueued) {
           const nextFull = refreshQueuedFull;
           refreshQueued = false;
           refreshQueuedFull = false;
@@ -1388,18 +1255,12 @@
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) queueDashboardRefresh('resume', false);
     });
-    if (typeof MOBILE_PROPERTY_MEDIA.addEventListener === 'function') {
-      MOBILE_PROPERTY_MEDIA.addEventListener('change', () => refreshPropertySelectionState({ scroll: false }));
-    } else if (typeof MOBILE_PROPERTY_MEDIA.addListener === 'function') {
-      MOBILE_PROPERTY_MEDIA.addListener(() => refreshPropertySelectionState({ scroll: false }));
+    {% endif %}
+    {% if page_view != 'summary' %}
+    function queueDashboardRefresh(reason = 'action', full = false) {
+      window.setTimeout(() => window.location.reload(), 150);
     }
-    window.addEventListener('hashchange', () => {
-      const propertyId = propertyIdFromHash();
-      if (propertyId) {
-        applySelectedPropertyState(propertyId, { persist: true, syncHash: false, scroll: false });
-      }
-    });
-    refreshPropertySelectionState({ scroll: false });
+    {% endif %}
 
     async function loadMakerDevices(pid) {
       const container = document.getElementById(`${pid}_maker_device_list`);
@@ -1992,6 +1853,13 @@
         scheduleRulesSaveStateReset(pid, 7000);
       }
     }
+
+    {% if page_view == 'rules' %}
+    {% for card in cards %}
+    loadSensors('{{ card.id }}');
+    loadMakerDevices('{{ card.id }}');
+    {% endfor %}
+    {% endif %}
   </script>
 
 </body>

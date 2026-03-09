@@ -157,6 +157,12 @@
   border-radius: 10px;
 }
 
+.header-nav-btn.is-current {
+  border-color: rgba(94, 201, 202, 0.88) !important;
+  background: rgba(16, 73, 78, 0.86) !important;
+  color: #ffffff !important;
+}
+
 .header-alert-link {
   display: inline-flex;
   align-items: center;

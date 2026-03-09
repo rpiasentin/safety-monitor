@@ -1327,16 +1327,76 @@ templates.env.globals.update({
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    """Main live dashboard — auto-refreshes every 60 s."""
-    props  = CONFIG.get("properties", [])
-    latest = db.get_latest_merged_all()
-    alerts = db.get_dashboard_alerts(hours=24, recent_limit=20)
-    container_health = _collect_container_health(CONFIG)
+def _view_path(view: str, property_id: str | None = None) -> str:
+    normalized_view = str(view or "summary").strip().lower()
+    if normalized_view not in {"summary", "decisions", "rules"}:
+        normalized_view = "summary"
+    if property_id:
+        return f"/property/{property_id}/{normalized_view}"
+    return f"/system/{normalized_view}"
 
-    # Merge raw_json extra fields (pv_eg4, pv_victron_1/2, battery_charging_power,
-    # load_power, etc.) into each row so the template can access them directly.
+
+def _build_shell_context(view: str,
+                         global_alerts: list[dict],
+                         property_id: str | None = None) -> dict:
+    normalized_view = str(view or "summary").strip().lower()
+    current_property_id = str(property_id or "").strip()
+    prop = _get_property_cfg(current_property_id) if current_property_id else None
+
+    property_counts: dict[str, int] = {}
+    for alert in (global_alerts or []):
+        pid = str(alert.get("property_id") or "").strip()
+        if not pid:
+            continue
+        property_counts[pid] = property_counts.get(pid, 0) + 1
+
+    property_links = []
+    for cfg in CONFIG.get("properties", []):
+        pid = str(cfg.get("id") or "").strip()
+        if not pid:
+            continue
+        property_links.append({
+            "id": pid,
+            "name": cfg.get("name", pid),
+            "url": _view_path(normalized_view, pid),
+            "alert_count": property_counts.get(pid, 0),
+            "is_current": pid == current_property_id,
+        })
+
+    scope_alert_count = sum(
+        1 for alert in (global_alerts or [])
+        if not current_property_id or str(alert.get("property_id") or "").strip() == current_property_id
+    )
+
+    return {
+        "current_view": normalized_view,
+        "current_property_id": current_property_id,
+        "scope_label": (prop or {}).get("name") if prop else "System",
+        "view_urls": {
+            "summary": _view_path("summary", current_property_id or None),
+            "decisions": _view_path("decisions", current_property_id or None),
+            "rules": _view_path("rules", current_property_id or None),
+        },
+        "alerts_url": f"{_view_path('summary', current_property_id or None)}#alerts-wrapper",
+        "property_links": property_links,
+        "alert_count": scope_alert_count,
+        "system_url": _view_path(normalized_view, None),
+    }
+
+
+def _build_dashboard_page_data(property_id: str | None = None) -> dict:
+    props = CONFIG.get("properties", [])
+    current_property_id = str(property_id or "").strip()
+    if current_property_id:
+        props = [p for p in props if str(p.get("id") or "").strip() == current_property_id]
+    latest = db.get_latest_merged_all()
+    global_alerts = db.get_dashboard_alerts(hours=24, recent_limit=20)
+    alerts = [
+        row for row in global_alerts
+        if not current_property_id or str(row.get("property_id") or "").strip() == current_property_id
+    ]
+    container_health = _collect_container_health(CONFIG) if not current_property_id else None
+
     for row in latest.values():
         raw_str = row.get("raw_json")
         if raw_str:
@@ -1348,7 +1408,6 @@ async def dashboard(request: Request):
             except Exception:
                 pass
 
-    # Build per-property context
     global_alerts_cfg = CONFIG.get("alerts", {})
     global_temp_cfg = global_alerts_cfg.get("temperature", {})
     global_battery_cfg = global_alerts_cfg.get("battery", {})
@@ -1375,10 +1434,11 @@ async def dashboard(request: Request):
         "device_id",
         limit=500,
     )
+
     cards = []
     for p in props:
-        pid  = p["id"]
-        row  = latest.get(pid, {})
+        pid = p["id"]
+        row = latest.get(pid, {})
         devs = db.get_hubitat_devices(pid)
         pcfg = p.get("alerts", {})
         collector_types = {
@@ -1386,17 +1446,13 @@ async def dashboard(request: Request):
             for c in p.get("collectors", [])
             if c.get("type")
         }
-        # Find current primary_temp_sensor from collector configs
         primary_sensor = next(
             (c.get("primary_temp_sensor", "") for c in p.get("collectors", [])
              if c.get("primary_temp_sensor")),
             ""
         )
+        prop_alerts = [a for a in global_alerts if a["property_id"] == pid]
 
-        # Alert counts for this property
-        prop_alerts = [a for a in alerts if a["property_id"] == pid]
-
-        # Temp status
         pt = row.get("primary_temp")
         ts = formatters.temp_status(pt)
         feed_health = []
@@ -1448,7 +1504,6 @@ async def dashboard(request: Request):
                 continue
             expected = str(warning.get("expected_state") or "").strip().lower()
             observed = str(lock.get("state") or "").strip().lower()
-            # Hide stale warning once lock converges to expected state.
             lock["command_warning"] = warning if (not expected or observed != expected) else None
         for valve in valve_devices:
             did = str(valve.get("entity_id") or "").strip()
@@ -1467,129 +1522,114 @@ async def dashboard(request: Request):
         source_warnings = row.get("source_warnings") if isinstance(row.get("source_warnings"), list) else []
 
         cards.append({
-            "id":             pid,
-            "name":           p.get("name", pid),
-            "enabled":        p.get("enabled", True),
-            "has_hubitat":    "hubitat_cloud" in collector_types,
-            "reading":        row,
-            "devices":        devs,
-            "feed_health":    feed_health,
+            "id": pid,
+            "name": p.get("name", pid),
+            "enabled": p.get("enabled", True),
+            "has_hubitat": "hubitat_cloud" in collector_types,
+            "reading": row,
+            "devices": devs,
+            "feed_health": feed_health,
             "source_warnings": source_warnings,
-            "lock_devices":   lock_devices,
-            "lock_counts":    lock_counts,
-            "valve_devices":  valve_devices,
-            "valve_counts":   valve_counts,
-            "smoke_devices":  smoke_devices,
-            "smoke_counts":   smoke_counts,
-            "water_devices":  water_devices,
-            "water_counts":   water_counts,
+            "lock_devices": lock_devices,
+            "lock_counts": lock_counts,
+            "valve_devices": valve_devices,
+            "valve_counts": valve_counts,
+            "smoke_devices": smoke_devices,
+            "smoke_counts": smoke_counts,
+            "water_devices": water_devices,
+            "water_counts": water_counts,
             "water_cutoff_notice": str(pcfg.get("water_cutoff_notice") or "").strip(),
             "smoke_sustain_minutes": int(pcfg.get("smoke_sustain_minutes",
                                       global_smoke_cfg.get("sustain_minutes", 3))),
             "smoke_mute_default_minutes": int(pcfg.get("smoke_mute_default_minutes",
                                            global_smoke_cfg.get("mute_default_minutes", 60))),
-            "alert_count":    len(prop_alerts),
-            "recent_alerts":  prop_alerts[:3],
-            "primary_temp":   pt,
-            "temp_status":    ts,
-            "temp_color":     formatters.temp_color(ts),
-            "soc_color":      formatters.soc_color(row.get("soc")),
-            # Alert threshold config (for settings panel)
+            "alert_count": len(prop_alerts),
+            "recent_alerts": prop_alerts[:3],
+            "primary_temp": pt,
+            "temp_status": ts,
+            "temp_color": formatters.temp_color(ts),
+            "soc_color": formatters.soc_color(row.get("soc")),
             "alerts_cfg": {
-                "indoor_temp_warning":  pcfg.get("indoor_temp_warning",
-                                            global_temp_cfg.get("threshold_fahrenheit", 40)),
-                "indoor_temp_critical": pcfg.get("indoor_temp_critical",
-                                            global_temp_cfg.get("critical_fahrenheit", 32)),
-                "temperature_cooldown_minutes": pcfg.get(
-                    "temperature_cooldown_minutes",
-                    global_temp_cfg.get("cooldown_minutes", 60),
-                ),
-                "temperature_pushover_enabled": pcfg.get(
-                    "temperature_pushover_enabled",
-                    global_temp_cfg.get("pushover_enabled", True),
-                ),
-                "temp_graph_hours":    pcfg.get("temp_graph_hours",
-                                            global_temp_cfg.get("graph_hours", 24)),
-                "outdoor_temp_warning":  pcfg.get("outdoor_temp_warning", 15),
+                "indoor_temp_warning": pcfg.get("indoor_temp_warning", global_temp_cfg.get("threshold_fahrenheit", 40)),
+                "indoor_temp_critical": pcfg.get("indoor_temp_critical", global_temp_cfg.get("critical_fahrenheit", 32)),
+                "temperature_cooldown_minutes": pcfg.get("temperature_cooldown_minutes", global_temp_cfg.get("cooldown_minutes", 60)),
+                "temperature_pushover_enabled": pcfg.get("temperature_pushover_enabled", global_temp_cfg.get("pushover_enabled", True)),
+                "temp_graph_hours": pcfg.get("temp_graph_hours", global_temp_cfg.get("graph_hours", 24)),
+                "outdoor_temp_warning": pcfg.get("outdoor_temp_warning", 15),
                 "outdoor_temp_critical": pcfg.get("outdoor_temp_critical", 0),
-                "outdoor_sensors":    pcfg.get("outdoor_sensors", []),
-                "exclude_sensors":    pcfg.get("exclude_sensors", []),
+                "outdoor_sensors": pcfg.get("outdoor_sensors", []),
+                "exclude_sensors": pcfg.get("exclude_sensors", []),
                 "primary_temp_sensor": primary_sensor,
-                "battery_low_threshold_percent": pcfg.get(
-                    "battery_low_threshold_percent",
-                    global_battery_cfg.get("low_threshold_percent", 20),
-                ),
-                "battery_critical_threshold_percent": pcfg.get(
-                    "battery_critical_threshold_percent",
-                    global_battery_cfg.get("critical_threshold_percent", 10),
-                ),
-                "battery_cooldown_minutes": pcfg.get(
-                    "battery_cooldown_minutes",
-                    global_battery_cfg.get("cooldown_minutes", 120),
-                ),
-                "battery_pushover_enabled": pcfg.get(
-                    "battery_pushover_enabled",
-                    global_battery_cfg.get("pushover_enabled", True),
-                ),
-                "battery_exclude_devices": pcfg.get(
-                    "battery_exclude_devices",
-                    global_battery_cfg.get("exclude_devices", []),
-                ),
-                "offline_timeout_minutes": pcfg.get(
-                    "offline_timeout_minutes",
-                    global_offline_cfg.get("timeout_minutes", 30),
-                ),
-                "offline_cooldown_minutes": pcfg.get(
-                    "offline_cooldown_minutes",
-                    global_offline_cfg.get("cooldown_minutes", 120),
-                ),
-                "offline_pushover_enabled": pcfg.get(
-                    "offline_pushover_enabled",
-                    global_offline_cfg.get("pushover_enabled", True),
-                ),
-                "water_pushover_enabled": pcfg.get(
-                    "water_pushover_enabled",
-                    global_water_cfg.get("pushover_enabled", True),
-                ),
-                "water_exclude_sensors": pcfg.get(
-                    "water_exclude_sensors",
-                    global_water_cfg.get("exclude_sensors", []),
-                ),
-                "smoke_sustain_minutes": pcfg.get(
-                    "smoke_sustain_minutes",
-                    global_smoke_cfg.get("sustain_minutes", 3),
-                ),
-                "smoke_cooldown_minutes": pcfg.get(
-                    "smoke_cooldown_minutes",
-                    global_smoke_cfg.get("cooldown_minutes", 60),
-                ),
-                "smoke_mute_default_minutes": pcfg.get(
-                    "smoke_mute_default_minutes",
-                    global_smoke_cfg.get("mute_default_minutes", 60),
-                ),
-                "smoke_pushover_enabled": pcfg.get(
-                    "smoke_pushover_enabled",
-                    global_smoke_cfg.get("pushover_enabled", True),
-                ),
-                "suppress_maker_device_alerts": pcfg.get(
-                    "suppress_maker_device_alerts",
-                    False,
-                ),
-                "suppress_maker_devices": pcfg.get(
-                    "suppress_maker_devices",
-                    [],
-                ),
+                "battery_low_threshold_percent": pcfg.get("battery_low_threshold_percent", global_battery_cfg.get("low_threshold_percent", 20)),
+                "battery_critical_threshold_percent": pcfg.get("battery_critical_threshold_percent", global_battery_cfg.get("critical_threshold_percent", 10)),
+                "battery_cooldown_minutes": pcfg.get("battery_cooldown_minutes", global_battery_cfg.get("cooldown_minutes", 120)),
+                "battery_pushover_enabled": pcfg.get("battery_pushover_enabled", global_battery_cfg.get("pushover_enabled", True)),
+                "battery_exclude_devices": pcfg.get("battery_exclude_devices", global_battery_cfg.get("exclude_devices", [])),
+                "offline_timeout_minutes": pcfg.get("offline_timeout_minutes", global_offline_cfg.get("timeout_minutes", 30)),
+                "offline_cooldown_minutes": pcfg.get("offline_cooldown_minutes", global_offline_cfg.get("cooldown_minutes", 120)),
+                "offline_pushover_enabled": pcfg.get("offline_pushover_enabled", global_offline_cfg.get("pushover_enabled", True)),
+                "water_pushover_enabled": pcfg.get("water_pushover_enabled", global_water_cfg.get("pushover_enabled", True)),
+                "water_exclude_sensors": pcfg.get("water_exclude_sensors", global_water_cfg.get("exclude_sensors", [])),
+                "smoke_sustain_minutes": pcfg.get("smoke_sustain_minutes", global_smoke_cfg.get("sustain_minutes", 3)),
+                "smoke_cooldown_minutes": pcfg.get("smoke_cooldown_minutes", global_smoke_cfg.get("cooldown_minutes", 60)),
+                "smoke_mute_default_minutes": pcfg.get("smoke_mute_default_minutes", global_smoke_cfg.get("mute_default_minutes", 60)),
+                "smoke_pushover_enabled": pcfg.get("smoke_pushover_enabled", global_smoke_cfg.get("pushover_enabled", True)),
+                "suppress_maker_device_alerts": pcfg.get("suppress_maker_device_alerts", False),
+                "suppress_maker_devices": pcfg.get("suppress_maker_devices", []),
             },
         })
 
+    return {
+        "cards": cards,
+        "alerts": alerts,
+        "global_alerts": global_alerts,
+        "container_health": container_health,
+    }
+
+
+def _render_summary_or_rules(request: Request,
+                             view: str,
+                             property_id: str | None = None) -> HTMLResponse:
+    page_data = _build_dashboard_page_data(property_id=property_id)
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
-        "cards":   cards,
-        "alerts":  alerts,
-        "container_health": container_health,
-        "config":  CONFIG,
+        "cards": page_data.get("cards") or [],
+        "alerts": page_data.get("alerts") or [],
+        "container_health": page_data.get("container_health"),
+        "config": CONFIG,
+        "page_view": str(view or "summary").strip().lower(),
+        "shell": _build_shell_context(view, page_data.get("global_alerts") or [], property_id=property_id),
         "static_version": _static_asset_version("css/monitor-ui.css"),
     })
+
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/system/summary", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    """System summary view."""
+    return _render_summary_or_rules(request, view="summary")
+
+
+@app.get("/system/rules", response_class=HTMLResponse)
+async def system_rules(request: Request):
+    """System rules view."""
+    return _render_summary_or_rules(request, view="rules")
+
+
+@app.get("/property/{property_id}/summary", response_class=HTMLResponse)
+async def property_summary(request: Request, property_id: str):
+    """Per-property summary view."""
+    if not _get_property_cfg(property_id):
+        return HTMLResponse(f"<h1>Property '{property_id}' not found</h1>", status_code=404)
+    return _render_summary_or_rules(request, view="summary", property_id=property_id)
+
+
+@app.get("/property/{property_id}/rules", response_class=HTMLResponse)
+async def property_rules(request: Request, property_id: str):
+    """Per-property rules view."""
+    if not _get_property_cfg(property_id):
+        return HTMLResponse(f"<h1>Property '{property_id}' not found</h1>", status_code=404)
+    return _render_summary_or_rules(request, view="rules", property_id=property_id)
 
 
 @app.get("/devices/{property_id}", response_class=HTMLResponse)
@@ -1722,20 +1762,18 @@ async def all_temperatures(request: Request, property_id: str, sensor: str = "")
     })
 
 
-@app.get("/decisions", response_class=HTMLResponse)
-async def system_decisions(request: Request,
+def _render_decisions_page(request: Request,
+                           property_id: str | None = None,
                            level: str = "",
-                           property_id: str = "",
                            event_type: str = "",
                            limit: int = 250,
-                           cursor: int = 0):
-    """Dedicated page for critical system decisions/operator actions."""
+                           cursor: int = 0) -> HTMLResponse:
     def _query(params: dict) -> str:
         q = {k: v for k, v in params.items() if v not in (None, "", 0)}
         return urlencode(q)
 
     level_filter = level.strip().lower() or None
-    property_filter = property_id.strip() or None
+    property_filter = str(property_id or "").strip() or None
     type_filter = event_type.strip().lower() or None
     try:
         lim = max(1, min(int(limit), 1000))
@@ -1751,29 +1789,36 @@ async def system_decisions(request: Request,
         event_type=type_filter,
     )
     events = _decode_system_event_rows(rows)
+    page_base = _view_path("decisions", property_filter)
     base_params = {
         "level": level_filter or "",
         "property_id": property_filter or "",
         "event_type": type_filter or "",
         "limit": lim,
     }
-    newer_url = "/decisions"
+    newer_url = page_base
     newer_q = _query(base_params)
     if newer_q:
-        newer_url = f"/decisions?{newer_q}"
+        newer_url = f"{page_base}?{newer_q}"
 
     older_url = None
     if next_cursor:
         older_q = _query({**base_params, "cursor": int(next_cursor)})
-        older_url = f"/decisions?{older_q}" if older_q else "/decisions"
+        older_url = f"{page_base}?{older_q}" if older_q else page_base
 
     export_limit = max(1000, lim)
     csv_q = _query({**base_params, "cursor": cursor_id or "", "limit": export_limit, "format": "csv"})
     json_q = _query({**base_params, "cursor": cursor_id or "", "limit": export_limit, "format": "json"})
+    shell = _build_shell_context(
+        "decisions",
+        db.get_dashboard_alerts(hours=24, recent_limit=20),
+        property_id=property_filter,
+    )
 
     return templates.TemplateResponse("system_decisions.html", {
         "request": request,
         "config": CONFIG,
+        "shell": shell,
         "static_version": _static_asset_version("css/monitor-ui.css"),
         "events": events,
         "filters": {
@@ -1794,6 +1839,45 @@ async def system_decisions(request: Request,
             "json_url": f"/api/system/decisions/export?{json_q}" if json_q else "/api/system/decisions/export?format=json",
         },
     })
+
+
+@app.get("/decisions", response_class=HTMLResponse)
+@app.get("/system/decisions", response_class=HTMLResponse)
+async def system_decisions(request: Request,
+                           level: str = "",
+                           property_id: str = "",
+                           event_type: str = "",
+                           limit: int = 250,
+                           cursor: int = 0):
+    """System decisions view."""
+    return _render_decisions_page(
+        request,
+        property_id=property_id or None,
+        level=level,
+        event_type=event_type,
+        limit=limit,
+        cursor=cursor,
+    )
+
+
+@app.get("/property/{property_id}/decisions", response_class=HTMLResponse)
+async def property_decisions(request: Request,
+                             property_id: str,
+                             level: str = "",
+                             event_type: str = "",
+                             limit: int = 250,
+                             cursor: int = 0):
+    """Per-property decisions view."""
+    if not _get_property_cfg(property_id):
+        return HTMLResponse(f"<h1>Property '{property_id}' not found</h1>", status_code=404)
+    return _render_decisions_page(
+        request,
+        property_id=property_id,
+        level=level,
+        event_type=event_type,
+        limit=limit,
+        cursor=cursor,
+    )
 
 
 @app.get("/api/status")

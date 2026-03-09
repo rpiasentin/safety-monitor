@@ -21,7 +21,7 @@
 
   <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 monitor-header">
     <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-      <a href="/" class="monitor-nav-link text-xs sm:text-sm">← Dashboard</a>
+      <a href="/property/{{ prop.id }}/summary" class="monitor-nav-link text-xs sm:text-sm">← {{ prop.name }} Summary</a>
       <a href="/temperatures/{{ prop.id }}" class="monitor-nav-link text-xs sm:text-sm">🌡 All Temperatures</a>
       <div class="flex items-center gap-2">
         <span class="text-lg sm:text-xl">📟</span>
