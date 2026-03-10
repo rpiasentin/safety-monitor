@@ -1350,7 +1350,13 @@ def _build_shell_context(view: str,
             continue
         property_counts[pid] = property_counts.get(pid, 0) + 1
 
-    property_links = []
+    property_links = [{
+        "id": "system",
+        "name": "System",
+        "url": _view_path(normalized_view, None),
+        "alert_count": 0,
+        "is_current": not current_property_id,
+    }]
     for cfg in CONFIG.get("properties", []):
         pid = str(cfg.get("id") or "").strip()
         if not pid:
