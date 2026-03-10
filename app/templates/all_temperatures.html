@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ prop.name }} — All Temperatures · {{ config.web.title }}</title>
+  <title>{{ prop.name }} · All Temperatures · {{ config.web.title }}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -14,22 +14,61 @@
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen monitor-body">
 
-  <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 monitor-header">
-    <div class="flex flex-wrap items-center gap-2 sm:gap-3">
-      <a href="/property/{{ prop.id }}/summary" class="monitor-nav-link text-xs sm:text-sm">← {{ prop.name }} Summary</a>
-      <a href="/devices/{{ prop.id }}" class="monitor-nav-link text-xs sm:text-sm">📟 Device Activity</a>
-      <div class="flex items-center gap-2">
-        <span class="text-lg sm:text-xl">🌡</span>
-        <h1 class="monitor-page-title text-base sm:text-lg font-bold text-white tracking-tight">{{ prop.name }} · All Temperatures</h1>
-      </div>
+  <header class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 monitor-header monitor-dashboard-header">
+    <div class="header-title-row">
+      <h1 class="header-title text-white tracking-tight">07PLUS02 LLC SM</h1>
+      <span class="monitor-chip monitor-status-chip rounded-full">{{ shell.scope_label }} · Summary</span>
     </div>
-    <div class="flex items-center gap-3 text-xs sm:text-sm text-gray-300">
-      <span class="monitor-chip px-2.5 py-1 rounded-full">Auto refresh 60s</span>
-      <span id="clock" class="monitor-chip monitor-clock px-2.5 py-1 rounded-full"></span>
+    <div class="header-status-row">
+      <span id="clock" class="monitor-chip monitor-clock font-mono tabular-nums rounded-full"></span>
+      <span class="monitor-chip monitor-status-chip rounded-full">view refresh 60s</span>
+    </div>
+    <div class="header-nav-row">
+      <a href="{{ shell.view_urls.summary }}"
+        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium is-current"
+        title="Summary view">Summary</a>
+      {% if shell.alert_count > 0 %}
+        <a href="{{ shell.alerts_url }}"
+          class="monitor-chip header-nav-btn header-alert-link bg-red-600 text-white font-semibold"
+          title="Jump to active alerts">
+          {{ shell.alert_count }} alert{{ 's' if shell.alert_count != 1 }}
+        </a>
+      {% else %}
+        <a href="{{ shell.alerts_url }}"
+          class="monitor-chip header-nav-btn header-alert-link bg-green-900 text-green-300 font-semibold"
+          title="Jump to alerts">
+          All clear
+        </a>
+      {% endif %}
+      <a href="{{ shell.view_urls.decisions }}"
+        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium"
+        title="Critical system decisions log">Decisions</a>
+      <a href="{{ shell.view_urls.rules }}"
+        class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium"
+        title="Alert rule settings">Rules</a>
+    </div>
+    <div class="header-property-row">
+      {% for link in shell.property_links %}
+      <a href="{{ link.url }}"
+        class="header-property-link {% if link.alert_count > 0 %}is-alert{% endif %} {% if link.is_current %}is-selected{% endif %}"
+        title="Jump to {{ link.name }} summary">
+        <span class="header-property-label">{{ link.name }}</span>
+        {% if link.alert_count > 0 %}
+          <span class="header-property-badge">{{ link.alert_count }}</span>
+        {% endif %}
+      </a>
+      {% endfor %}
     </div>
   </header>
 
   <main class="px-4 pb-8 pt-6 sm:px-6 max-w-6xl mx-auto space-y-5 monitor-main">
+    <div class="monitor-card rounded-2xl p-4">
+      <div class="header-nav-row">
+        <a href="{{ branch_urls.summary }}" class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium">Property Summary</a>
+        <a href="{{ branch_urls.devices }}" class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium">Device Activity</a>
+        <span class="monitor-chip header-nav-btn settings-nav-current text-white font-semibold">All Temperatures</span>
+      </div>
+    </div>
     <div class="monitor-meta-strip rounded-2xl border px-4 py-3 text-xs text-gray-300 flex flex-wrap gap-3">
       <span>Graph window: {{ graph_hours }}h</span>
       {% if latest_collected_at %}

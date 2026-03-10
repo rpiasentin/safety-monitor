@@ -1609,6 +1609,15 @@ def _render_summary_or_rules(request: Request,
     })
 
 
+def _property_branch_urls(property_id: str) -> dict[str, str]:
+    pid = str(property_id or "").strip()
+    return {
+        "summary": _view_path("summary", pid),
+        "devices": f"/property/{pid}/devices",
+        "temperatures": f"/property/{pid}/temperatures",
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/system/summary", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -1639,6 +1648,7 @@ async def property_rules(request: Request, property_id: str):
 
 
 @app.get("/devices/{property_id}", response_class=HTMLResponse)
+@app.get("/property/{property_id}/devices", response_class=HTMLResponse)
 async def device_activity(request: Request, property_id: str):
     """Per-property device activity view — last seen timestamps for all Hubitat devices."""
     # Find property config
@@ -1681,12 +1691,15 @@ async def device_activity(request: Request, property_id: str):
         "warn_mins":     warn_mins,
         "crit_mins":     crit_mins,
         "counts":        counts,
+        "shell":         _build_shell_context("summary", db.get_dashboard_alerts(hours=24, recent_limit=20), property_id=property_id),
+        "branch_urls":   _property_branch_urls(property_id),
         "config":        CONFIG,
         "static_version": _static_asset_version("css/monitor-ui.css"),
     })
 
 
 @app.get("/temperatures/{property_id}", response_class=HTMLResponse)
+@app.get("/property/{property_id}/temperatures", response_class=HTMLResponse)
 async def all_temperatures(request: Request, property_id: str, sensor: str = ""):
     """Per-property temperature view with current values and recent trend graph."""
     props = CONFIG.get("properties", [])
@@ -1756,6 +1769,8 @@ async def all_temperatures(request: Request, property_id: str, sensor: str = "")
     return templates.TemplateResponse("all_temperatures.html", {
         "request": request,
         "prop": prop,
+        "shell": _build_shell_context("summary", db.get_dashboard_alerts(hours=24, recent_limit=20), property_id=property_id),
+        "branch_urls": _property_branch_urls(property_id),
         "config": CONFIG,
         "static_version": _static_asset_version("css/monitor-ui.css"),
         "latest_collected_at": row.get("collected_at") if row else None,

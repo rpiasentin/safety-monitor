@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   {% set app_title = config.get('web', {}).get('title', 'Safety Monitor') %}
   {% set page_view = page_view|default('summary') %}
-  <title>{% if shell and (shell.scope_label != 'System' or page_view != 'summary') %}{{ shell.scope_label }} · {{ page_view|title }} · {% endif %}{{ app_title }}</title>
+  <title>{% if shell %}{{ shell.scope_label }} · {{ page_view|title }} · {% endif %}{{ app_title }}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -24,7 +24,7 @@
   <header id="dashboard-top" class="bg-gray-900 border-b border-gray-800 px-4 sm:px-6 py-3 monitor-header monitor-dashboard-header">
     <div class="header-title-row">
       <h1 class="header-title text-white tracking-tight">{{ dashboard_title }}</h1>
-      {% if shell and (shell.scope_label != 'System' or page_view != 'summary') %}
+      {% if shell %}
       <span class="monitor-chip monitor-status-chip rounded-full">{{ shell.scope_label }} · {{ page_view|title }}</span>
       {% endif %}
     </div>
@@ -433,7 +433,7 @@
               </div>
               {% if card.primary_temp is not none %}
               {% set ts = card.temp_status %}
-              <a href="/temperatures/{{ card.id }}" class="property-primary-temp-wrap property-primary-temp-link">
+              <a href="/property/{{ card.id }}/temperatures" class="property-primary-temp-wrap property-primary-temp-link">
                 <span class="property-primary-temp property-primary-temp-{{ ts }}">
                   {% if ts == 'critical' %}🥶{% else %}🌡{% endif %}
                   {{ fmt_temp(card.primary_temp) }}
@@ -934,7 +934,7 @@
 
           <!-- Device activity link -->
           {% if card.has_hubitat %}
-          <a href="/devices/{{ card.id }}"
+          <a href="/property/{{ card.id }}/devices"
              class="monitor-link-row property-link-button flex items-center justify-between text-xs text-gray-300 hover:text-blue-300 transition-colors mt-1 pt-2 border-t border-gray-800 group">
             <span>📟 Device activity</span>
             <span class="group-hover:translate-x-0.5 transition-transform">→</span>
@@ -1364,29 +1364,6 @@
         container.innerHTML = html;
       } catch(e) {
         container.innerHTML = `<p class="text-xs text-red-400 py-2 text-center">Error: ${e.message}</p>`;
-      }
-    }
-
-    // Settings panel toggle
-    function toggleSettings() {
-      const panel = document.getElementById('settings-panel');
-      const btn   = document.getElementById('settings-btn');
-      const shown = !panel.classList.contains('hidden');
-      panel.classList.toggle('hidden', shown);
-      document.body.classList.toggle('settings-open', !shown);
-      btn.classList.toggle('bg-gray-700', !shown);
-      btn.classList.toggle('text-white',  !shown);
-      if (!shown) {
-        // Load sensor lists for all properties
-        {% for card in cards %}loadSensors('{{ card.id }}');
-        loadMakerDevices('{{ card.id }}');
-        {% endfor %}
-        setTimeout(() => panel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
-        setRefreshStatus('live update paused while editing', 'warning');
-      } else if (refreshQueued) {
-        queueDashboardRefresh('settings-closed', refreshQueuedFull);
-      } else {
-        setRefreshStatus('updated every 60s', 'muted');
       }
     }
 
