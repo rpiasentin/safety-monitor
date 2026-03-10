@@ -110,6 +110,57 @@ class HAClient:
                     pass
         return result
 
+    @staticmethod
+    def _normalize_lock_state(raw_state) -> str:
+        if raw_state is None:
+            return "unknown"
+        s = str(raw_state).strip().lower()
+        if s in {"locked", "locking", "unlocked", "unlocking", "jammed", "unknown", "unavailable"}:
+            return s
+        return s
+
+    def get_lock_devices(self,
+                         lock_entities: list[dict] | list[str] | None = None,
+                         states: list[dict] | None = None) -> list[dict]:
+        """Return configured HA lock entities as lock device rows."""
+        if states is None:
+            states = self.get_states()
+        if not lock_entities:
+            return []
+
+        by_entity = {
+            str(row.get("entity_id") or "").strip(): row
+            for row in (states or [])
+            if str(row.get("entity_id") or "").strip()
+        }
+
+        out = []
+        for item in lock_entities:
+            if isinstance(item, str):
+                entity_id = str(item).strip()
+                friendly_name = ""
+            else:
+                entity_id = str((item or {}).get("entity_id") or "").strip()
+                friendly_name = str((item or {}).get("friendly_name") or "").strip()
+            if not entity_id:
+                continue
+            row = by_entity.get(entity_id) or {}
+            attrs = row.get("attributes") or {}
+            state = self._normalize_lock_state(row.get("state"))
+            display_name = friendly_name or str(attrs.get("friendly_name") or entity_id)
+            out.append({
+                "entity_id": entity_id,
+                "friendly_name": display_name,
+                "device_type": "Home Assistant Lock",
+                "state": state,
+                "can_lock": False,
+                "can_unlock": False,
+                "supports_commands": False,
+                "state_source": "ha_api",
+                "last_activity": row.get("last_updated") or row.get("last_changed"),
+            })
+        return out
+
     def get_tesla_energy_data(self, prefix: str = "powerwall") -> dict | None:
         """Pull Tesla Powerwall/solar data via HA Tesla Energy integration.
         prefix: entity ID prefix, e.g. "piasentin"
@@ -207,6 +258,7 @@ class HACollector(BaseCollector):
         self.include_tesla   = cfg.get("include_tesla", False)
         self.include_temps   = cfg.get("include_temps", True)
         self.include_batt    = cfg.get("include_batteries", True)
+        self.lock_entities   = cfg.get("lock_entities") or []
         self.tesla_prefix    = cfg.get("tesla_vehicle_prefix", "tesla")
         self.tesla_type      = cfg.get("tesla_type", "vehicle")  # "vehicle" or "energy"
 
@@ -220,6 +272,7 @@ class HACollector(BaseCollector):
                   if self.include_temps else {}
         devices = self.client.get_battery_devices(self.location_id, states) \
                   if self.include_batt else []
+        locks   = self.client.get_lock_devices(self.lock_entities, states) if self.lock_entities else []
 
         primary_temp = None
         if self.temp_sensor and self.temp_sensor in temps:
@@ -233,6 +286,7 @@ class HACollector(BaseCollector):
             "temperatures":    temps,
             "primary_temp":    primary_temp,
             "battery_devices": devices,
+            "lock_devices":    locks,
         }
 
         if self.include_tesla:

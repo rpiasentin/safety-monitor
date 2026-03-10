@@ -443,8 +443,18 @@ def _rollup(sources: dict) -> dict:
     out["valve_devices"] = list(hub.get("water_cutoff_devices") or hub.get("valve_devices") or [])
     out["water_cutoff_devices"] = list(hub.get("water_cutoff_devices") or hub.get("valve_devices") or [])
 
-    # Property security/safety rollups (currently from Hubitat cloud feeds)
-    out["lock_devices"] = list(hub.get("lock_devices") or [])
+    # Property security/safety rollups
+    hub_locks = list(hub.get("lock_devices") or [])
+    ha_locks = list(ha.get("lock_devices") or [])
+    seen_lock_ids = {str(row.get("entity_id") or "").strip() for row in hub_locks if str(row.get("entity_id") or "").strip()}
+    for row in ha_locks:
+        entity_id = str(row.get("entity_id") or "").strip()
+        if entity_id and entity_id in seen_lock_ids:
+            continue
+        hub_locks.append(row)
+        if entity_id:
+            seen_lock_ids.add(entity_id)
+    out["lock_devices"] = hub_locks
     out["smoke_devices"] = list(hub.get("smoke_devices") or [])
     # Maker API inventory for per-device suppression and Rules UI controls.
     out["maker_devices"] = list(hub.get("all_devices") or [])

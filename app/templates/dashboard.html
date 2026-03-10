@@ -682,15 +682,18 @@
               </div>
               <div class="property-lock-actions">
                 <button onclick='runLockAction({{ card.id|tojson }}, "lock", "all")'
-                        class="property-action-btn action-lock">Lock all</button>
+                        class="property-action-btn action-lock"
+                        {% if not card.lock_controls_enabled %}disabled{% endif %}>Lock all</button>
                 <button onclick='runLockAction({{ card.id|tojson }}, "unlock", "all")'
-                        class="property-action-btn action-unlock">Unlock all</button>
+                        class="property-action-btn action-unlock"
+                        {% if not card.lock_controls_enabled %}disabled{% endif %}>Unlock all</button>
               </div>
               <div class="property-safety-list">
                 {% for lock in card.lock_devices %}
                 <div class="property-safety-row">
                   <div class="property-safety-name-wrap">
                     <span class="property-safety-name">{{ lock.friendly_name }}</span>
+                    <span class="property-safety-note">state via {{ lock.state_source_label }}</span>
                     {% if lock.command_warning %}
                     <span class="property-lock-warning">
                       ⚠ command sent but status not changing

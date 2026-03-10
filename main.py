@@ -873,6 +873,10 @@ def _decorate_lock_devices(lock_devices: list[dict]) -> tuple[list[dict], dict]:
             counts["other"] += 1
         row["status"] = status
         row["state_label"] = state_label
+        source = str(row.get("state_source") or "hubitat_cloud").strip().lower()
+        row["state_source"] = source
+        row["state_source_label"] = "Home Assistant" if source == "ha_api" else "Hubitat"
+        row["supports_commands"] = bool(row.get("can_lock") or row.get("can_unlock"))
         decorated.append(row)
     return decorated, counts
 
@@ -1526,6 +1530,10 @@ def _build_dashboard_page_data(property_id: str | None = None) -> dict:
             smoke_state_map=smoke_state_map,
         )
         source_warnings = row.get("source_warnings") if isinstance(row.get("source_warnings"), list) else []
+        lock_controls_enabled = bool(lock_devices) and all(
+            bool(lock.get("supports_commands"))
+            for lock in lock_devices
+        )
 
         cards.append({
             "id": pid,
@@ -1538,6 +1546,7 @@ def _build_dashboard_page_data(property_id: str | None = None) -> dict:
             "source_warnings": source_warnings,
             "lock_devices": lock_devices,
             "lock_counts": lock_counts,
+            "lock_controls_enabled": lock_controls_enabled,
             "valve_devices": valve_devices,
             "valve_counts": valve_counts,
             "smoke_devices": smoke_devices,

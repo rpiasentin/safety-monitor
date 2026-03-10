@@ -112,6 +112,11 @@ properties:
     include_tesla: true
     tesla_type: energy
     tesla_vehicle_prefix: piasentin
+    lock_entities:
+    - entity_id: lock.aqara_smart_lock_u400
+      friendly_name: Garage door lock
+    - entity_id: lock.aqara_smart_lock_u400_2
+      friendly_name: Basement door lock
 
 - id: lr
   name: Lariat
