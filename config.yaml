@@ -105,7 +105,7 @@ properties:
       actuator_type: relay
       state_attribute: switch
   - type: ha_api
-    url: http://192.168.1.115:8123
+    url: http://192.168.4.139:8123
     location_id: hc
     include_temps: false
     include_batteries: false
