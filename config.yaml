@@ -26,7 +26,7 @@ properties:
     host: 192.168.2.132
     mqtt_port: 1883
   - type: hubitat_cloud
-    endpoint: https://cloud.hubitat.com/api/4ea3d66e-7d03-475d-9397-8324c32b1bdc/apps/14/devices/all
+    endpoint: http://192.168.2.25/apps/api/14/devices/all
     primary_temp_sensor: Forget Deck temperature
   alerts:
     outdoor_sensors:
@@ -145,7 +145,8 @@ properties:
     temp_graph_hours: 24
     battery_exclude_devices: []
     water_exclude_sensors: []
-    suppress_maker_devices: []
+    suppress_maker_devices:
+    - '149'
     battery_pushover_enabled: true
     offline_pushover_enabled: true
     water_pushover_enabled: true
