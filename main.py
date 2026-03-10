@@ -1605,6 +1605,7 @@ def _render_summary_or_rules(request: Request,
         "config": CONFIG,
         "page_view": str(view or "summary").strip().lower(),
         "shell": _build_shell_context(view, page_data.get("global_alerts") or [], property_id=property_id),
+        "branch_urls": _property_branch_urls(property_id) if property_id else None,
         "static_version": _static_asset_version("css/monitor-ui.css"),
     })
 
