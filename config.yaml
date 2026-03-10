@@ -98,7 +98,7 @@ properties:
     suppress_maker_device_alerts: false
   collectors:
   - type: hubitat_cloud
-    endpoint: https://cloud.hubitat.com/api/8d4cc6c3-ce67-4421-8984-5669cb4d4696/apps/82/devices/all
+    endpoint: http://192.168.4.91/apps/api/82/devices/all
     primary_temp_sensor: OUT-N-T
     water_cutoff_devices:
     - device_id: "82"
@@ -119,7 +119,7 @@ properties:
   enabled: true
   collectors:
   - type: hubitat_cloud
-    endpoint: https://cloud.hubitat.com/api/6d7091ac-7444-4e72-b01d-6d07b1e5dc65/apps/28/devices/all
+    endpoint: http://192.168.1.134/apps/api/28/devices/all
     primary_temp_sensor: Deck
   alerts:
     exclude_sensors:
