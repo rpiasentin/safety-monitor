@@ -1481,11 +1481,12 @@ def _build_dashboard_page_data(property_id: str | None = None) -> dict:
                 label, source_row.get("collected_at") if source_row else None
             ))
 
+        merged_payload = _parse_raw_payload(row)
         hub_payload = _parse_raw_payload(source_rows.get("hubitat_cloud"))
         hub_collected_at = source_rows.get("hubitat_cloud", {}).get("collected_at") if source_rows.get("hubitat_cloud") else None
         valve_state_map = db.get_shutoff_valve_state_map(pid)
         lock_devices, lock_counts = _decorate_lock_devices(
-            list(hub_payload.get("lock_devices") or [])
+            list(merged_payload.get("lock_devices") or hub_payload.get("lock_devices") or [])
         )
         visible_valves = _filter_valve_devices_for_property(
             list(hub_payload.get("water_cutoff_devices") or hub_payload.get("valve_devices") or []),
