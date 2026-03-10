@@ -10,6 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Sora:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ request.url_for('static', path='css/monitor-ui.css') }}?v={{ static_version }}">
+  <script defer src="{{ request.url_for('static', path='js/monitor-time.js') }}?v={{ static_version }}"></script>
   <meta http-equiv="refresh" content="60">
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen monitor-body">
@@ -62,8 +63,8 @@
   </header>
 
   <main class="px-4 pb-8 pt-6 sm:px-6 max-w-6xl mx-auto space-y-5 monitor-main">
-    <div class="monitor-card rounded-2xl p-4">
-      <div class="header-nav-row">
+    <div class="monitor-card rounded-2xl p-4 branch-nav-card">
+      <div class="header-nav-row branch-nav-row">
         <a href="{{ branch_urls.summary }}" class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium">Property Summary</a>
         <a href="{{ branch_urls.devices }}" class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium">Device Activity</a>
         <span class="monitor-chip header-nav-btn settings-nav-current text-white font-semibold">All Temperatures</span>
@@ -150,7 +151,13 @@
 
     {% if selected_sensor and graph_values and graph_values|length > 1 %}
     (() => {
-      const labels = {{ graph_labels | tojson }};
+      const rawLabels = {{ graph_labels | tojson }};
+      const labels = rawLabels.map((value) => {
+        if (window.MonitorTime?.formatChartLabel) {
+          return window.MonitorTime.formatChartLabel(value);
+        }
+        return value;
+      });
       const values = {{ graph_values | tojson }};
       const ctx = document.getElementById('tempChart');
       if (!ctx) return;

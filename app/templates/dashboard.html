@@ -74,8 +74,8 @@
 
   <main class="px-4 pb-8 pt-6 sm:px-6 max-w-7xl mx-auto monitor-main">
     {% if page_view == 'summary' and branch_urls %}
-    <div class="monitor-card rounded-2xl p-4 mb-6">
-      <div class="header-nav-row">
+    <div class="monitor-card rounded-2xl p-4 mb-6 branch-nav-card">
+      <div class="header-nav-row branch-nav-row">
         <span class="monitor-chip header-nav-btn settings-nav-current text-white font-semibold">Property Summary</span>
         <a href="{{ branch_urls.devices }}" class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium">Device Activity</a>
         <a href="{{ branch_urls.temperatures }}" class="monitor-button monitor-mini-button header-nav-btn text-gray-200 hover:text-white transition-colors text-xs font-medium">All Temperatures</a>

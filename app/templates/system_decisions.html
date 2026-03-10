@@ -10,6 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=Sora:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ request.url_for('static', path='css/monitor-ui.css') }}?v={{ static_version }}">
+  <script defer src="{{ request.url_for('static', path='js/monitor-time.js') }}?v={{ static_version }}"></script>
   <meta http-equiv="refresh" content="60">
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen monitor-body">
@@ -165,7 +166,7 @@
             <span class="font-mono text-gray-400">{{ ev.property_id }}</span>
             {% endif %}
             <span class="text-gray-500">{{ ago(ev.created_at) }}</span>
-            <span class="text-gray-600 font-mono">{{ ev.created_at }}</span>
+            <span class="text-gray-600 font-mono" data-local-ts="{{ ev.created_at }}" data-local-format="full">{{ ev.created_at }}</span>
           </div>
 
           <p class="text-sm text-gray-200">{{ ev.message }}</p>
