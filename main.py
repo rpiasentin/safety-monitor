@@ -38,6 +38,7 @@ import db
 import formatters
 import scheduler
 import water_service
+from collectors.ha_api import HAClient
 from collectors.hubitat import HubitatCloudClient
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -458,6 +459,31 @@ def _hubitat_client_for_property(property_id: str) -> HubitatCloudClient | None:
     return HubitatCloudClient(coll_cfg["endpoint"], api_token=token)
 
 
+def _ha_collector_cfg(property_id: str) -> dict | None:
+    prop = _get_property_cfg(property_id)
+    if not prop:
+        return None
+    return next(
+        (c for c in prop.get("collectors", []) if c.get("type") == "ha_api"),
+        None,
+    )
+
+
+def _ha_client_for_property(property_id: str) -> HAClient | None:
+    coll_cfg = _ha_collector_cfg(property_id)
+    if not coll_cfg:
+        return None
+    token = (
+        coll_cfg.get("token")
+        or os.getenv(f"HA_{property_id.upper()}_TOKEN")
+        or os.getenv("HA_LONG_LIVED_TOKEN", "")
+    )
+    url = coll_cfg.get("url")
+    if not url or not token:
+        return None
+    return HAClient(url=url, token=token)
+
+
 def _schedule_collection_refresh(retries: int = 3,
                                  wait_seconds: int = 5,
                                  always_run: bool = False,
@@ -668,6 +694,60 @@ def _record_lock_state_unchanged(property_id: str,
         )
         warnings.append(details)
     return warnings
+
+
+def _verify_ha_lock_transition(client: HAClient,
+                               lock_entities: list[dict],
+                               expected_states: dict[str, str],
+                               name_hints: dict[str, str] | None = None,
+                               polls: int = 2,
+                               wait_seconds: int = 3,
+                               initial_delay_seconds: int = 15) -> dict:
+    pending: dict[str, dict] = {}
+    for device_id, expected in (expected_states or {}).items():
+        did = str(device_id).strip()
+        if not did:
+            continue
+        pending[did] = {
+            "device_id": did,
+            "expected_state": str(expected or "").strip().lower(),
+            "observed_state": "unknown",
+            "friendly_name": (name_hints or {}).get(did) or did,
+        }
+
+    polls = max(1, int(polls))
+    wait_seconds = max(1, int(wait_seconds))
+    initial_delay_seconds = max(0, int(initial_delay_seconds))
+
+    if initial_delay_seconds > 0:
+        time.sleep(initial_delay_seconds)
+
+    for attempt in range(polls):
+        if attempt > 0:
+            time.sleep(wait_seconds)
+        try:
+            current = client.get_lock_devices(lock_entities)
+        except Exception as exc:
+            logger.warning("HA lock transition verification poll failed: %s", exc)
+            continue
+        by_id = {str(x.get("entity_id")): x for x in current}
+        for did in list(pending.keys()):
+            row = pending[did]
+            cur = by_id.get(did, {})
+            observed = str(cur.get("state") or "unknown").strip().lower()
+            row["observed_state"] = observed
+            if cur.get("friendly_name"):
+                row["friendly_name"] = cur.get("friendly_name")
+            if observed == row["expected_state"]:
+                del pending[did]
+        if not pending:
+            break
+
+    unresolved = sorted(pending.values(), key=lambda x: str(x.get("friendly_name") or x.get("device_id")))
+    return {
+        "ok": len(unresolved) == 0,
+        "unresolved": unresolved,
+    }
 
 
 def _verify_valve_transition(client: HubitatCloudClient,
@@ -2091,7 +2171,7 @@ async def api_system_decisions_export(format: str = "csv",
 @app.post("/api/property/{property_id}/locks/all/{action}")
 async def api_lock_all(property_id: str, action: str,
                        _auth=Depends(_require_write_auth)):
-    """Lock/unlock all locks for a property via Hubitat Maker API."""
+    """Lock/unlock all locks for a property via Hubitat and/or Home Assistant."""
     cmd = str(action or "").strip().lower()
     if cmd not in {"lock", "unlock"}:
         return JSONResponse(status_code=400, content={"error": "Action must be 'lock' or 'unlock'"})
@@ -2100,13 +2180,41 @@ async def api_lock_all(property_id: str, action: str,
     if not prop:
         return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
 
-    client = _hubitat_client_for_property(property_id)
-    if not client:
-        return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
+    hub_client = _hubitat_client_for_property(property_id)
+    ha_client = _ha_client_for_property(property_id)
+    merged_payload = _parse_raw_payload(db.get_latest_reading(property_id, source="merged"))
+    merged_locks = list(merged_payload.get("lock_devices") or [])
+    if not merged_locks and hub_client:
+        merged_locks = hub_client.get_lock_devices()
+    if not merged_locks:
+        return JSONResponse(status_code=400, content={"error": "Property has no lock devices available"})
 
+    hub_locks = [row for row in merged_locks if str(row.get("state_source") or "hubitat_cloud").strip().lower() != "ha_api"]
+    ha_locks = [row for row in merged_locks if str(row.get("state_source") or "").strip().lower() == "ha_api"]
     try:
-        locks = client.get_lock_devices()
-        result = client.command_locks(cmd, locks)
+        results = []
+        attempted = 0
+        succeeded = 0
+        if hub_locks:
+            if not hub_client:
+                raise RuntimeError("Hubitat lock command path is unavailable")
+            hub_result = hub_client.command_locks(cmd, hub_locks)
+            attempted += int(hub_result.get("attempted") or 0)
+            succeeded += int(hub_result.get("succeeded") or 0)
+            results.extend(hub_result.get("results") or [])
+        if ha_locks:
+            if not ha_client:
+                raise RuntimeError("Home Assistant lock command path is unavailable")
+            ha_result = ha_client.command_locks(cmd, ha_locks)
+            attempted += int(ha_result.get("attempted") or 0)
+            succeeded += int(ha_result.get("succeeded") or 0)
+            results.extend(ha_result.get("results") or [])
+        result = {
+            "attempted": attempted,
+            "succeeded": succeeded,
+            "failed": attempted - succeeded,
+            "results": results,
+        }
     except Exception as exc:
         _record_system_event(
             event_type="lock_command_all_failed",
@@ -2141,22 +2249,47 @@ async def api_lock_all(property_id: str, action: str,
         name_hints[did] = str(row.get("friendly_name") or did)
 
     warnings: list[dict] = []
-    if attempted_ids:
+    if attempted_ids and hub_client:
         expected = _expected_lock_state(cmd)
-        verify = _verify_lock_transition(
-            client,
-            expected_states={did: expected for did in attempted_ids},
-            name_hints=name_hints,
-            polls=2,
-            wait_seconds=3,
-            initial_delay_seconds=15,
-        )
-        if not verify.get("ok"):
-            warnings = _record_lock_state_unchanged(
-                property_id=property_id,
-                action=cmd,
-                unresolved=verify.get("unresolved") or [],
+        hub_attempted = {
+            did for did in attempted_ids
+            if str(next((row.get("state_source") for row in merged_locks if str(row.get("entity_id") or "") == did), "hubitat_cloud")).lower() != "ha_api"
+        }
+        if hub_attempted:
+            verify = _verify_lock_transition(
+                hub_client,
+                expected_states={did: expected for did in hub_attempted},
+                name_hints=name_hints,
+                polls=2,
+                wait_seconds=3,
+                initial_delay_seconds=15,
             )
+            if not verify.get("ok"):
+                warnings.extend(_record_lock_state_unchanged(
+                    property_id=property_id,
+                    action=cmd,
+                    unresolved=verify.get("unresolved") or [],
+                ))
+        ha_attempted = {
+            did for did in attempted_ids
+            if str(next((row.get("state_source") for row in merged_locks if str(row.get("entity_id") or "") == did), "")).lower() == "ha_api"
+        }
+        if ha_attempted and ha_client:
+            verify = _verify_ha_lock_transition(
+                ha_client,
+                [row for row in ha_locks if str(row.get("entity_id") or "").strip() in ha_attempted],
+                expected_states={did: expected for did in ha_attempted},
+                name_hints=name_hints,
+                polls=2,
+                wait_seconds=3,
+                initial_delay_seconds=15,
+            )
+            if not verify.get("ok"):
+                warnings.extend(_record_lock_state_unchanged(
+                    property_id=property_id,
+                    action=cmd,
+                    unresolved=verify.get("unresolved") or [],
+                ))
 
     # Lock hardware/cloud states can settle a few seconds after command ACK.
     # Run a short rolling refresh window so dashboard lock pills converge fast.
@@ -2191,18 +2324,32 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
     if not prop:
         return JSONResponse(status_code=404, content={"error": f"Property '{property_id}' not found"})
 
-    client = _hubitat_client_for_property(property_id)
-    if not client:
+    hub_client = _hubitat_client_for_property(property_id)
+    ha_client = _ha_client_for_property(property_id)
+    merged_payload = _parse_raw_payload(db.get_latest_reading(property_id, source="merged"))
+    merged_locks = list(merged_payload.get("lock_devices") or [])
+    lock_row = next((row for row in merged_locks if str(row.get("entity_id") or "").strip() == str(device_id).strip()), None)
+    state_source = str((lock_row or {}).get("state_source") or "hubitat_cloud").strip().lower()
+    if state_source == "ha_api":
+        client_kind = "ha_api"
+    else:
+        client_kind = "hubitat_cloud"
+    if client_kind == "hubitat_cloud" and not hub_client:
         return JSONResponse(status_code=400, content={"error": "Property has no Hubitat collector configured"})
+    if client_kind == "ha_api" and not ha_client:
+        return JSONResponse(status_code=400, content={"error": "Property has no Home Assistant collector configured"})
 
     lock_name = device_id
     try:
-        known_locks = client.get_lock_devices()
+        known_locks = merged_locks or (hub_client.get_lock_devices() if hub_client else [])
         for lock in known_locks:
             if str(lock.get("entity_id")) == str(device_id):
                 lock_name = lock.get("friendly_name") or device_id
                 break
-        result = client.command_device(device_id, cmd)
+        if client_kind == "ha_api":
+            result = ha_client.command_lock(str(device_id), cmd)
+        else:
+            result = hub_client.command_device(device_id, cmd)
     except Exception as exc:
         _record_system_event(
             event_type="lock_command_failed",
@@ -2224,14 +2371,26 @@ async def api_lock_device(property_id: str, device_id: str, action: str,
     )
 
     warnings: list[dict] = []
-    verify = _verify_lock_transition(
-        client,
-        expected_states={str(device_id): _expected_lock_state(cmd)},
-        name_hints={str(device_id): str(lock_name)},
-        polls=2,
-        wait_seconds=3,
-        initial_delay_seconds=15,
-    )
+    expected_state = _expected_lock_state(cmd)
+    if client_kind == "ha_api":
+        verify = _verify_ha_lock_transition(
+            ha_client,
+            [lock_row] if lock_row else [{"entity_id": str(device_id), "friendly_name": str(lock_name)}],
+            expected_states={str(device_id): expected_state},
+            name_hints={str(device_id): str(lock_name)},
+            polls=2,
+            wait_seconds=3,
+            initial_delay_seconds=15,
+        )
+    else:
+        verify = _verify_lock_transition(
+            hub_client,
+            expected_states={str(device_id): expected_state},
+            name_hints={str(device_id): str(lock_name)},
+            polls=2,
+            wait_seconds=3,
+            initial_delay_seconds=15,
+        )
     if not verify.get("ok"):
         warnings = _record_lock_state_unchanged(
             property_id=property_id,

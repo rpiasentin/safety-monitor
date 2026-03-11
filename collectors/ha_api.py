@@ -65,6 +65,19 @@ class HAClient:
             logger.debug("HA get_state(%s) failed: %s", entity_id, exc)
             return None
 
+    def call_service(self, domain: str, service: str, payload: dict) -> dict | list | None:
+        resp = requests.post(
+            f"{self.url}/api/services/{domain}/{service}",
+            headers=self.headers,
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        resp.raise_for_status()
+        try:
+            return resp.json()
+        except Exception:
+            return {"raw": resp.text}
+
     def get_temperature_sensors(self, location_id: str,
                                  states: list[dict] | None = None) -> dict[str, float]:
         """Return {entity_id: °F} for temperature sensors matching location_id."""
@@ -148,18 +161,70 @@ class HAClient:
             attrs = row.get("attributes") or {}
             state = self._normalize_lock_state(row.get("state"))
             display_name = friendly_name or str(attrs.get("friendly_name") or entity_id)
+            can_lock = state in {"unlocked", "unlocking", "unknown", "unavailable"}
+            can_unlock = state in {"locked", "locking", "unknown", "unavailable"}
             out.append({
                 "entity_id": entity_id,
                 "friendly_name": display_name,
                 "device_type": "Home Assistant Lock",
                 "state": state,
-                "can_lock": False,
-                "can_unlock": False,
-                "supports_commands": False,
+                "can_lock": bool(can_lock),
+                "can_unlock": bool(can_unlock),
+                "supports_commands": True,
                 "state_source": "ha_api",
                 "last_activity": row.get("last_updated") or row.get("last_changed"),
             })
         return out
+
+    def command_lock(self, entity_id: str, command: str) -> dict:
+        cmd = str(command or "").strip().lower()
+        if cmd not in {"lock", "unlock"}:
+            raise ValueError(f"Unsupported HA lock command: {command}")
+        payload = {"entity_id": entity_id}
+        response = self.call_service("lock", cmd, payload)
+        return {
+            "device_id": str(entity_id),
+            "command": cmd,
+            "ok": True,
+            "response": response,
+        }
+
+    def command_locks(self, command: str, locks: list[dict] | None = None) -> dict:
+        cmd = str(command or "").strip().lower()
+        if cmd not in {"lock", "unlock"}:
+            raise ValueError(f"Unsupported HA lock command: {command}")
+
+        locks = list(locks or [])
+        results = []
+        attempted = 0
+        succeeded = 0
+        capability_key = f"can_{cmd}"
+        for lock in locks:
+            if lock.get(capability_key) is False:
+                continue
+            entity_id = str(lock.get("entity_id") or "").strip()
+            if not entity_id:
+                continue
+            attempted += 1
+            try:
+                res = self.command_lock(entity_id, cmd)
+                res["friendly_name"] = lock.get("friendly_name") or entity_id
+                results.append(res)
+                succeeded += 1
+            except Exception as exc:
+                results.append({
+                    "device_id": entity_id,
+                    "friendly_name": lock.get("friendly_name") or entity_id,
+                    "command": cmd,
+                    "ok": False,
+                    "error": str(exc),
+                })
+        return {
+            "attempted": attempted,
+            "succeeded": succeeded,
+            "failed": attempted - succeeded,
+            "results": results,
+        }
 
     def get_tesla_energy_data(self, prefix: str = "powerwall") -> dict | None:
         """Pull Tesla Powerwall/solar data via HA Tesla Energy integration.
