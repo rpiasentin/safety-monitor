@@ -1596,6 +1596,13 @@ def _build_dashboard_page_data(property_id: str | None = None) -> dict:
             expected = str(warning.get("expected_state") or "").strip().lower()
             observed = str(lock.get("state") or "").strip().lower()
             lock["command_warning"] = warning if (not expected or observed != expected) else None
+        if pid == "hc":
+            for lock in lock_devices:
+                if (
+                    str(lock.get("friendly_name") or "").strip().lower() == "front door lock"
+                    and str(lock.get("status") or "").strip().lower() == "unknown"
+                ):
+                    lock["state_label"] = "On hold for install"
         for valve in valve_devices:
             did = str(valve.get("entity_id") or "").strip()
             warning = prop_valve_warnings.get(did)
