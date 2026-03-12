@@ -33,6 +33,18 @@
       <span id="live-refresh-status" class="monitor-chip monitor-status-chip rounded-full">
         {% if page_view == 'summary' %}updated every 60s{% else %}view refresh 60s{% endif %}
       </span>
+      {% if page_view == 'summary' %}
+      <span class="header-load-toggle">
+        <a href="{{ shell.load_profile_urls.light }}"
+          class="monitor-chip header-mode-chip {% if load_profile == 'light' %}is-current{% endif %}">
+          Light
+        </a>
+        <a href="{{ shell.load_profile_urls.full }}"
+          class="monitor-chip header-mode-chip {% if load_profile == 'full' %}is-current{% endif %}">
+          Full
+        </a>
+      </span>
+      {% endif %}
     </div>
     <div class="header-nav-row">
       <a href="{{ shell.view_urls.summary }}"
@@ -429,6 +441,55 @@
 
     <!-- Property cards grid -->
     {% if page_view == 'summary' %}
+    {% if load_profile == 'light' and not shell.current_property_id %}
+    <div id="property-grid" class="space-y-3 mb-8 property-grid property-grid-light">
+      {% for card in compact_cards %}
+      <a id="prop-{{ card.id }}" href="{{ card.summary_url }}" class="light-summary-card">
+        <div class="light-summary-top">
+          <div>
+            <div class="light-summary-title">{{ card.name }}</div>
+            <div class="light-summary-meta">
+              {% if card.alert_count > 0 %}
+              <span class="property-alert-chip bg-red-600 text-white text-xs px-2 py-0.5 rounded-full font-semibold">
+                {{ card.alert_count }} alert{{ 's' if card.alert_count != 1 }}
+              </span>
+              {% else %}
+              <span class="property-alert-chip property-alert-chip-clear text-xs px-2 py-0.5 rounded-full font-semibold">
+                all clear
+              </span>
+              {% endif %}
+              {% if card.reading %}
+              <span class="text-xs text-gray-500">{{ ago(card.reading.get('collected_at')) }}</span>
+              {% else %}
+              <span class="text-xs text-gray-500">no data</span>
+              {% endif %}
+            </div>
+          </div>
+          {% if card.primary_temp is not none %}
+          <span class="property-primary-temp property-primary-temp-{{ card.temp_status }}">
+            {% if card.temp_status == 'critical' %}🥶{% else %}🌡{% endif %}
+            {{ fmt_temp(card.primary_temp) }}
+          </span>
+          {% endif %}
+        </div>
+        <div class="light-summary-health">
+          {% for feed in card.feed_health[:3] %}
+          <span class="feed-health-box feed-{{ feed.status }}">
+            <span class="feed-health-label">{{ feed.label }}</span>
+            <span class="feed-health-value">{{ feed.last_activity }}</span>
+          </span>
+          {% endfor %}
+        </div>
+        <div class="light-summary-flags">
+          <span class="light-summary-flag">💧 {{ card.water_wet_count }} wet</span>
+          <span class="light-summary-flag">🚨 {{ card.smoke_critical_count }} alarm</span>
+          <span class="light-summary-flag">🚰 {{ card.water_off_count }} water off</span>
+          <span class="light-summary-flag">🔓 {{ card.lock_unlocked_count }} unlocked</span>
+        </div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
     <div id="property-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 property-grid">
       {% for card in cards %}
       <div id="prop-{{ card.id }}" class="bg-gray-900 rounded-2xl border {% if card.alert_count > 0 %}border-red-700{% else %}border-gray-800{% endif %} overflow-hidden monitor-card property-card">
@@ -550,7 +611,7 @@
             or reading.get('tesla_soc') is not none
             or reading.get('grid_online') is not none
           ) %}
-          {% if has_energy %}
+          {% if has_energy and load_profile == 'full' %}
           <div class="property-energy-panel">
             <div class="property-energy-title-row">
               <p class="property-energy-title">Energy Snapshot</p>
@@ -923,7 +984,7 @@
           {% endif %}
 
           <!-- Device batteries -->
-          {% if card.devices %}
+          {% if card.devices and load_profile == 'full' %}
           <div>
             <p class="text-xs uppercase tracking-wider text-gray-500 mb-2 font-semibold">
               Device Batteries ({{ card.devices|length }})
@@ -967,6 +1028,7 @@
       </div><!-- /card -->
       {% endfor %}
     </div><!-- /grid -->
+    {% endif %}
     {% endif %}
 
     <!-- Recent alerts -->
@@ -1033,7 +1095,7 @@
     </section>
     {% endif %}
 
-    {% if page_view == 'summary' and container_health %}
+    {% if page_view == 'summary' and container_health and load_profile == 'full' %}
     <section id="container-health-section" class="bg-gray-900 rounded-2xl border border-gray-800 overflow-hidden mt-8 monitor-card">
       <div class="px-5 py-4 border-b border-gray-800 flex items-center justify-between gap-3">
         <h2 class="text-base font-bold text-white">Container Health</h2>
@@ -1128,6 +1190,8 @@
 
     {% if page_view == 'summary' %}
     const AUTO_REFRESH_MS = 60_000;
+    const SUMMARY_LOAD_PROFILE = {{ load_profile|tojson }};
+    const REFRESH_SUMMARY_SECTIONS = SUMMARY_LOAD_PROFILE === 'light';
     let refreshInFlight = false;
     let refreshQueued = false;
     let refreshQueuedFull = false;
@@ -1233,10 +1297,12 @@
         replaceSectionFromDoc('#header-alert-chip', nextDoc);
         replaceSectionFromDoc('#header-property-row', nextDoc);
         replaceSectionFromDoc('#alerts-wrapper', nextDoc);
-        if (full) {
+        if (full || REFRESH_SUMMARY_SECTIONS) {
           replaceSectionFromDoc('#summary-section', nextDoc);
-          replaceSectionFromDoc('#container-health-section', nextDoc);
           replaceSectionFromDoc('#property-grid', nextDoc);
+        }
+        if (full) {
+          replaceSectionFromDoc('#container-health-section', nextDoc);
         }
         const stamp = new Date().toLocaleTimeString('en-US', {
           hour: '2-digit',

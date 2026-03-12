@@ -48,6 +48,17 @@ app/templates/
   system_decisions.html  Critical decision/event trace page
 ```
 
+Summary views now support explicit load profiles:
+
+- `/system/summary/full`
+- `/system/summary/light`
+- `/property/{id}/summary/full`
+- `/property/{id}/summary/light`
+
+The witness/Funnel ingress can set `X-SM-Load-Profile: light` so public traffic
+lands on the lighter first-load variant without splitting the app into separate
+products.
+
 ## Properties
 
 | ID | Name | Solar | HA | Notes |

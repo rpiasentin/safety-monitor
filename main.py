@@ -1389,7 +1389,15 @@ def _apply_no_cache(response: Response) -> Response:
 async def disable_cache_for_live_views(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path or "/"
-    if path == "/" or path.startswith("/devices/") or path.startswith("/temperatures/") or path == "/decisions" or path.startswith("/api/"):
+    if (
+        path == "/"
+        or path.startswith("/devices/")
+        or path.startswith("/temperatures/")
+        or path == "/decisions"
+        or path.startswith("/system/")
+        or path.startswith("/property/")
+        or path.startswith("/api/")
+    ):
         return _apply_no_cache(response)
     return response
 
@@ -1420,11 +1428,36 @@ def _view_path(view: str, property_id: str | None = None) -> str:
     return f"/system/{normalized_view}"
 
 
+def _normalize_load_profile(value: str | None) -> str:
+    profile = str(value or "").strip().lower()
+    return profile if profile in {"light", "full"} else "full"
+
+
+def _resolve_load_profile(request: Request, explicit: str | None = None) -> str:
+    for candidate in (
+        explicit,
+        request.query_params.get("load"),
+        request.headers.get("X-SM-Load-Profile"),
+    ):
+        profile = _normalize_load_profile(candidate)
+        if profile in {"light", "full"} and str(candidate or "").strip():
+            return profile
+    return "full"
+
+
+def _summary_path(property_id: str | None = None, load_profile: str = "full") -> str:
+    normalized_profile = _normalize_load_profile(load_profile)
+    base = _view_path("summary", property_id)
+    return f"{base}/{normalized_profile}"
+
+
 def _build_shell_context(view: str,
                          global_alerts: list[dict],
-                         property_id: str | None = None) -> dict:
+                         property_id: str | None = None,
+                         load_profile: str = "full") -> dict:
     normalized_view = str(view or "summary").strip().lower()
     current_property_id = str(property_id or "").strip()
+    current_load_profile = _normalize_load_profile(load_profile)
     prop = _get_property_cfg(current_property_id) if current_property_id else None
 
     property_counts: dict[str, int] = {}
@@ -1437,7 +1470,7 @@ def _build_shell_context(view: str,
     property_links = [{
         "id": "system",
         "name": "System",
-        "url": _view_path(normalized_view, None),
+        "url": _summary_path(None, current_load_profile) if normalized_view == "summary" else _view_path(normalized_view, None),
         "alert_count": 0,
         "is_current": not current_property_id,
     }]
@@ -1448,7 +1481,7 @@ def _build_shell_context(view: str,
         property_links.append({
             "id": pid,
             "name": cfg.get("name", pid),
-            "url": _view_path(normalized_view, pid),
+            "url": _summary_path(pid, current_load_profile) if normalized_view == "summary" else _view_path(normalized_view, pid),
             "alert_count": property_counts.get(pid, 0),
             "is_current": pid == current_property_id,
         })
@@ -1461,16 +1494,21 @@ def _build_shell_context(view: str,
     return {
         "current_view": normalized_view,
         "current_property_id": current_property_id,
+        "load_profile": current_load_profile,
         "scope_label": (prop or {}).get("name") if prop else "System",
         "view_urls": {
-            "summary": _view_path("summary", current_property_id or None),
+            "summary": _summary_path(current_property_id or None, current_load_profile),
             "decisions": _view_path("decisions", current_property_id or None),
             "rules": _view_path("rules", current_property_id or None),
         },
-        "alerts_url": f"{_view_path('summary', current_property_id or None)}#alerts-wrapper",
+        "alerts_url": f"{_summary_path(current_property_id or None, current_load_profile)}#alerts-wrapper",
         "property_links": property_links,
         "alert_count": scope_alert_count,
-        "system_url": _view_path(normalized_view, None),
+        "system_url": _summary_path(None, current_load_profile) if normalized_view == "summary" else _view_path(normalized_view, None),
+        "load_profile_urls": {
+            "light": _summary_path(current_property_id or None, "light"),
+            "full": _summary_path(current_property_id or None, "full"),
+        },
     }
 
 
@@ -1692,25 +1730,51 @@ def _build_dashboard_page_data(property_id: str | None = None) -> dict:
 
 def _render_summary_or_rules(request: Request,
                              view: str,
-                             property_id: str | None = None) -> HTMLResponse:
+                             property_id: str | None = None,
+                             load_profile: str | None = None) -> HTMLResponse:
+    effective_load_profile = _resolve_load_profile(request, explicit=load_profile)
     page_data = _build_dashboard_page_data(property_id=property_id)
+    cards = list(page_data.get("cards") or [])
+    for card in cards:
+        card["summary_url"] = _summary_path(card.get("id"), effective_load_profile)
+    compact_cards = [{
+        "id": card.get("id"),
+        "name": card.get("name"),
+        "summary_url": card.get("summary_url"),
+        "alert_count": int(card.get("alert_count") or 0),
+        "primary_temp": card.get("primary_temp"),
+        "temp_status": card.get("temp_status"),
+        "feed_health": list(card.get("feed_health") or []),
+        "reading": card.get("reading"),
+        "water_wet_count": int(((card.get("water_counts") or {}).get("wet")) or 0),
+        "smoke_critical_count": int(((card.get("smoke_counts") or {}).get("critical")) or 0),
+        "water_off_count": int(((card.get("valve_counts") or {}).get("off")) or 0),
+        "lock_unlocked_count": int(((card.get("lock_counts") or {}).get("unlocked")) or 0),
+    } for card in cards]
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
-        "cards": page_data.get("cards") or [],
+        "cards": cards,
+        "compact_cards": compact_cards,
         "alerts": page_data.get("alerts") or [],
         "container_health": page_data.get("container_health"),
         "config": CONFIG,
         "page_view": str(view or "summary").strip().lower(),
-        "shell": _build_shell_context(view, page_data.get("global_alerts") or [], property_id=property_id),
-        "branch_urls": _property_branch_urls(property_id) if property_id else None,
+        "load_profile": effective_load_profile,
+        "shell": _build_shell_context(
+            view,
+            page_data.get("global_alerts") or [],
+            property_id=property_id,
+            load_profile=effective_load_profile,
+        ),
+        "branch_urls": _property_branch_urls(property_id, effective_load_profile) if property_id else None,
         "static_version": _static_asset_version("css/monitor-ui.css"),
     })
 
 
-def _property_branch_urls(property_id: str) -> dict[str, str]:
+def _property_branch_urls(property_id: str, load_profile: str = "full") -> dict[str, str]:
     pid = str(property_id or "").strip()
     return {
-        "summary": _view_path("summary", pid),
+        "summary": _summary_path(pid, load_profile),
         "devices": f"/property/{pid}/devices",
         "temperatures": f"/property/{pid}/temperatures",
     }
@@ -1721,6 +1785,12 @@ def _property_branch_urls(property_id: str) -> dict[str, str]:
 async def dashboard(request: Request):
     """System summary view."""
     return _render_summary_or_rules(request, view="summary")
+
+
+@app.get("/system/summary/{load_profile}", response_class=HTMLResponse)
+async def dashboard_with_profile(request: Request, load_profile: str):
+    """System summary view with explicit load profile."""
+    return _render_summary_or_rules(request, view="summary", load_profile=load_profile)
 
 
 @app.get("/system/rules", response_class=HTMLResponse)
@@ -1735,6 +1805,14 @@ async def property_summary(request: Request, property_id: str):
     if not _get_property_cfg(property_id):
         return HTMLResponse(f"<h1>Property '{property_id}' not found</h1>", status_code=404)
     return _render_summary_or_rules(request, view="summary", property_id=property_id)
+
+
+@app.get("/property/{property_id}/summary/{load_profile}", response_class=HTMLResponse)
+async def property_summary_with_profile(request: Request, property_id: str, load_profile: str):
+    """Per-property summary view with explicit load profile."""
+    if not _get_property_cfg(property_id):
+        return HTMLResponse(f"<h1>Property '{property_id}' not found</h1>", status_code=404)
+    return _render_summary_or_rules(request, view="summary", property_id=property_id, load_profile=load_profile)
 
 
 @app.get("/property/{property_id}/rules", response_class=HTMLResponse)
@@ -1782,6 +1860,7 @@ async def device_activity(request: Request, property_id: str):
     for dev in devices:
         counts[dev["activity_status"]] = counts.get(dev["activity_status"], 0) + 1
 
+    load_profile = _resolve_load_profile(request)
     return templates.TemplateResponse("device_activity.html", {
         "request":       request,
         "prop":          prop,
@@ -1789,8 +1868,13 @@ async def device_activity(request: Request, property_id: str):
         "warn_mins":     warn_mins,
         "crit_mins":     crit_mins,
         "counts":        counts,
-        "shell":         _build_shell_context("summary", db.get_dashboard_alerts(hours=24, recent_limit=20), property_id=property_id),
-        "branch_urls":   _property_branch_urls(property_id),
+        "shell":         _build_shell_context(
+            "summary",
+            db.get_dashboard_alerts(hours=24, recent_limit=20),
+            property_id=property_id,
+            load_profile=load_profile,
+        ),
+        "branch_urls":   _property_branch_urls(property_id, load_profile),
         "config":        CONFIG,
         "static_version": _static_asset_version("css/monitor-ui.css"),
     })
@@ -1864,11 +1948,17 @@ async def all_temperatures(request: Request, property_id: str, sensor: str = "")
         graph_labels = [str(p.get("collected_at")) for p in graph_series]
         graph_values = [p.get("temperature_f") for p in graph_series]
 
+    load_profile = _resolve_load_profile(request)
     return templates.TemplateResponse("all_temperatures.html", {
         "request": request,
         "prop": prop,
-        "shell": _build_shell_context("summary", db.get_dashboard_alerts(hours=24, recent_limit=20), property_id=property_id),
-        "branch_urls": _property_branch_urls(property_id),
+        "shell": _build_shell_context(
+            "summary",
+            db.get_dashboard_alerts(hours=24, recent_limit=20),
+            property_id=property_id,
+            load_profile=load_profile,
+        ),
+        "branch_urls": _property_branch_urls(property_id, load_profile),
         "config": CONFIG,
         "static_version": _static_asset_version("css/monitor-ui.css"),
         "latest_collected_at": row.get("collected_at") if row else None,
@@ -1932,6 +2022,7 @@ def _render_decisions_page(request: Request,
         "decisions",
         db.get_dashboard_alerts(hours=24, recent_limit=20),
         property_id=property_filter,
+        load_profile=_resolve_load_profile(request),
     )
 
     return templates.TemplateResponse("system_decisions.html", {
