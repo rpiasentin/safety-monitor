@@ -1,6 +1,6 @@
 # Safety Monitor Backlog Status
 
-Last updated: 2026-03-08 (local agent tooling + browser automation hardening)
+Last updated: 2026-03-12 (light/full summary load profiles)
 
 ## Delivered In This Pass
 
@@ -78,6 +78,17 @@ Last updated: 2026-03-08 (local agent tooling + browser automation hardening)
 8. Smoke/CO escalation + controls
 - Added sustained smoke/CO alarm escalation policy (`alerts.smoke.sustain_minutes`).
 - Added smoke alarm alert type with persistent active alerts until clear/ack.
+
+9. Summary load profiles
+- Added explicit summary routes:
+  - `/system/summary/full`
+  - `/system/summary/light`
+  - `/property/{id}/summary/full`
+  - `/property/{id}/summary/light`
+- Added load-profile-aware shell navigation so Summary links preserve the current profile.
+- Added `X-SM-Load-Profile` support so upstream proxies can default traffic into the lighter summary mode.
+- Added a lighter system summary rendering path for public/witness traffic.
+- Reduced property-page payload in `light` mode by omitting heavier sections like energy snapshot, batteries, and container health from the initial render.
 - Added per-sensor smoke controls on property cards:
   - acknowledge until clear
   - mute for configurable minutes
