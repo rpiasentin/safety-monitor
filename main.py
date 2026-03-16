@@ -201,6 +201,114 @@ def _collector_feed_health(label: str, collected_at: str | None) -> dict:
     }
 
 
+_ENERGY_FRESHNESS_FIELDS = {
+    "soc",
+    "pv_total_power",
+    "pv_power",
+    "load_power",
+    "battery_charging_power",
+    "grid_power",
+    "grid_online",
+    "power_to_user",
+    "tesla",
+    "tesla_soc",
+    "tesla_power_kw",
+    "tesla_charging",
+}
+
+
+def _build_energy_freshness(
+    collector_types: set[str],
+    source_rows: dict[str, dict | None],
+    source_warnings: list[dict],
+    merged_payload: dict,
+) -> dict | None:
+    if not isinstance(merged_payload, dict):
+        return None
+
+    has_energy = any(merged_payload.get(field) is not None for field in _ENERGY_FRESHNESS_FIELDS)
+    if not has_energy:
+        return None
+
+    details: list[dict] = []
+    relevant_sources: list[tuple[str, str]] = []
+    if "eg4" in collector_types:
+        relevant_sources.append(("eg4", "EG4"))
+    if "victron" in collector_types:
+        relevant_sources.append(("victron", "Victron"))
+
+    has_stale_ha_fallback = any(
+        str(w.get("type") or "").strip().lower() == "stale_fallback"
+        and str(w.get("source") or "").strip().lower() == "ha_api"
+        for w in (source_warnings or [])
+        if isinstance(w, dict)
+    )
+    if (
+        "ha_api" in collector_types
+        and (
+            has_stale_ha_fallback
+            or isinstance(merged_payload.get("tesla"), dict)
+            or merged_payload.get("grid_online") is not None
+            or ("eg4" not in collector_types and "victron" not in collector_types)
+        )
+    ):
+        relevant_sources.append(("ha_api", "Home Assistant"))
+
+    for source_type, label in relevant_sources:
+        source_row = source_rows.get(source_type)
+        detail = _collector_feed_health(label, source_row.get("collected_at") if source_row else None)
+        detail["kind"] = "collector"
+        details.append(detail)
+
+    for warning in (source_warnings or []):
+        if not isinstance(warning, dict):
+            continue
+        if str(warning.get("type") or "").strip().lower() != "stale_fallback":
+            continue
+        applied_fields = {
+            str(field).strip()
+            for field in (warning.get("applied_fields") or [])
+            if str(field).strip()
+        }
+        if not applied_fields.intersection(_ENERGY_FRESHNESS_FIELDS):
+            continue
+        try:
+            age_minutes = max(1, int(float(warning.get("age_minutes", 0))))
+        except Exception:
+            age_minutes = 0
+        fallback_detail = _collector_feed_health(
+            "Stale fallback",
+            (datetime.now(timezone.utc) - timedelta(minutes=age_minutes)).isoformat() if age_minutes > 0 else None,
+        )
+        fallback_detail.update({
+            "label": "Energy fallback",
+            "kind": "fallback",
+            "message": str(warning.get("message") or "").strip(),
+            "source": str(warning.get("source") or "").strip(),
+            "applied_fields": sorted(applied_fields),
+        })
+        details.insert(0, fallback_detail)
+
+    if not details:
+        return None
+
+    non_good = [d for d in details if d.get("status") != "good"]
+    if not non_good:
+        summary = "all fresh"
+    elif details[0].get("kind") == "fallback":
+        summary = f"{details[0]['label']} {details[0]['last_activity']}"
+    elif len(non_good) == 1:
+        summary = f"{non_good[0]['label']} {non_good[0]['last_activity']}"
+    else:
+        summary = f"{len(non_good)} stale sources"
+
+    return {
+        "status": _worst_status([str(d.get("status") or "unknown") for d in details]),
+        "summary": summary,
+        "details": details,
+    }
+
+
 def _collect_container_health(config: dict) -> dict:
     """
     Gather container host KPIs with an emphasis on disk availability.
@@ -1600,8 +1708,15 @@ def _build_dashboard_page_data(property_id: str | None = None) -> dict:
             ))
 
         merged_payload = _parse_raw_payload(row)
+        source_warnings = row.get("source_warnings") if isinstance(row.get("source_warnings"), list) else []
         hub_payload = _parse_raw_payload(source_rows.get("hubitat_cloud"))
         hub_collected_at = source_rows.get("hubitat_cloud", {}).get("collected_at") if source_rows.get("hubitat_cloud") else None
+        energy_freshness = _build_energy_freshness(
+            collector_types,
+            source_rows,
+            source_warnings,
+            merged_payload,
+        )
         valve_state_map = db.get_shutoff_valve_state_map(pid)
         lock_devices, lock_counts = _decorate_lock_devices(
             list(merged_payload.get("lock_devices") or hub_payload.get("lock_devices") or [])
@@ -1655,7 +1770,6 @@ def _build_dashboard_page_data(property_id: str | None = None) -> dict:
             list(hub_payload.get("smoke_devices") or []),
             smoke_state_map=smoke_state_map,
         )
-        source_warnings = row.get("source_warnings") if isinstance(row.get("source_warnings"), list) else []
         lock_controls_enabled = bool(lock_devices) and all(
             bool(lock.get("supports_commands"))
             for lock in lock_devices
@@ -1669,6 +1783,7 @@ def _build_dashboard_page_data(property_id: str | None = None) -> dict:
             "reading": row,
             "devices": devs,
             "feed_health": feed_health,
+            "energy_freshness": energy_freshness,
             "source_warnings": source_warnings,
             "lock_devices": lock_devices,
             "lock_counts": lock_counts,

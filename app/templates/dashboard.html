@@ -617,6 +617,20 @@
               <p class="property-energy-title">Energy Snapshot</p>
               <span class="property-energy-stamp">{{ ago(reading.get('collected_at')) if reading.get('collected_at') else 'live' }}</span>
             </div>
+            {% if card.energy_freshness %}
+            <div class="property-energy-freshness">
+              <span class="property-energy-freshness-summary freshness-{{ card.energy_freshness.status }}">
+                Freshness: {{ card.energy_freshness.summary }}
+              </span>
+              {% for item in card.energy_freshness.details %}
+              <span class="property-energy-freshness-chip freshness-{{ item.status }}"
+                    {% if item.message %}title="{{ item.message }}"{% endif %}>
+                <span>{{ item.label }}</span>
+                <span>{{ item.last_activity }}</span>
+              </span>
+              {% endfor %}
+            </div>
+            {% endif %}
 
             <div class="property-energy-grid">
               {% if reading.get('soc') is not none %}
