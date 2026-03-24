@@ -4,6 +4,7 @@
 - Required local runtime is Python `3.11+`.
 - Required local UI automation runtime is Node.js with `npm` and `npx`.
 - Prefer a working `playwright-cli` install for browser verification; the Codex Playwright wrapper is an acceptable fallback when `npx` is present.
+- High Country prod HA is now `192.168.4.115:8123`; legacy `192.168.4.139` is decommissioning. The prod token is stored out-of-band at `/Users/rpias/dev/vscode-dev-env/.notes_access/secrets/highcountry_prod_ha_token.txt` and must not be committed.
 - Preferred commands:
   - `source .venv/bin/activate`
   - `make preflight`

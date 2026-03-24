@@ -122,3 +122,8 @@ Last updated: 2026-03-12 (light/full summary load profiles)
 1. Safety workflows
 - Add optional confirmation code flow for unlock actions.
 - Add role-based auth if/when `MONITOR_API_KEY` becomes mandatory.
+
+10. High Country HA prod cutover prep
+- Confirmed HC prod HA endpoint is `192.168.4.115:8123`; legacy `192.168.4.139` is being decommissioned.
+- Stored the prod HC HA token out-of-band at `/Users/rpias/dev/vscode-dev-env/.notes_access/secrets/highcountry_prod_ha_token.txt`.
+- Do not commit raw HA tokens to git; keep them only in secure local notes and CT104 `/opt/safety-monitor/.env`.

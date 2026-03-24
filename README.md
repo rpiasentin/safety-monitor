@@ -149,6 +149,11 @@ Completed:
 - Dedicated critical decision log page at `/decisions`
 - Persistent `system_events` decision trail in SQLite (operator/system actions)
 - Time-bounded stale Tesla/Powerwall fallback to keep HC energy cards visible during transient HA outages, with decision-log events
+
+High Country Home Assistant prod endpoint is now `http://192.168.4.115:8123`.
+Store the prod HC token out-of-band; current local secure path is
+`/Users/rpias/dev/vscode-dev-env/.notes_access/secrets/highcountry_prod_ha_token.txt`.
+Do not commit raw tokens to git.
 - Decisions page cursor pagination + incident export endpoint (`/api/system/decisions/export`)
 
 Operational details:
