@@ -66,6 +66,10 @@ def _device_index(rows: list[dict] | None) -> dict[str, dict]:
     return out
 
 
+def _norm_name(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
 class PropertyCollector:
     """Manages all collectors for a single property and merges their output."""
 
@@ -447,13 +451,26 @@ def _rollup(sources: dict) -> dict:
     hub_locks = list(hub.get("lock_devices") or [])
     ha_locks = list(ha.get("lock_devices") or [])
     seen_lock_ids = {str(row.get("entity_id") or "").strip() for row in hub_locks if str(row.get("entity_id") or "").strip()}
+    lock_name_index = {
+        _norm_name(row.get("friendly_name")): idx
+        for idx, row in enumerate(hub_locks)
+        if _norm_name(row.get("friendly_name"))
+    }
     for row in ha_locks:
         entity_id = str(row.get("entity_id") or "").strip()
+        friendly_name = _norm_name(row.get("friendly_name"))
         if entity_id and entity_id in seen_lock_ids:
+            continue
+        if friendly_name and friendly_name in lock_name_index:
+            hub_locks[lock_name_index[friendly_name]] = row
+            if entity_id:
+                seen_lock_ids.add(entity_id)
             continue
         hub_locks.append(row)
         if entity_id:
             seen_lock_ids.add(entity_id)
+        if friendly_name:
+            lock_name_index[friendly_name] = len(hub_locks) - 1
     out["lock_devices"] = hub_locks
     out["smoke_devices"] = list(hub.get("smoke_devices") or [])
     # Maker API inventory for per-device suppression and Rules UI controls.
