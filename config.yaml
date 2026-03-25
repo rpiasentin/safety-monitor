@@ -112,6 +112,9 @@ properties:
     include_tesla: true
     tesla_type: energy
     tesla_vehicle_prefix: piasentin
+    lock_exclude_entities:
+    - lock.locksite_aqara_lock_1
+    - lock.locksite_aqara_lock_2
     lock_entities:
     - entity_id: lock.front_door_lock
       friendly_name: Front door lock

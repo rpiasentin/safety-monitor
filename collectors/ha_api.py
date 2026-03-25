@@ -134,12 +134,18 @@ class HAClient:
 
     def get_lock_devices(self,
                          lock_entities: list[dict] | list[str] | None = None,
+                         exclude_entities: list[str] | set[str] | None = None,
                          states: list[dict] | None = None) -> list[dict]:
         """Return configured HA lock entities as lock device rows."""
         if states is None:
             states = self.get_states()
         if not lock_entities:
             return []
+        excluded = {
+            str(entity_id or "").strip().lower()
+            for entity_id in (exclude_entities or [])
+            if str(entity_id or "").strip()
+        }
 
         by_entity = {
             str(row.get("entity_id") or "").strip(): row
@@ -156,6 +162,8 @@ class HAClient:
                 entity_id = str((item or {}).get("entity_id") or "").strip()
                 friendly_name = str((item or {}).get("friendly_name") or "").strip()
             if not entity_id:
+                continue
+            if entity_id.lower() in excluded:
                 continue
             row = by_entity.get(entity_id) or {}
             attrs = row.get("attributes") or {}
@@ -324,6 +332,7 @@ class HACollector(BaseCollector):
         self.include_temps   = cfg.get("include_temps", True)
         self.include_batt    = cfg.get("include_batteries", True)
         self.lock_entities   = cfg.get("lock_entities") or []
+        self.lock_exclude_entities = cfg.get("lock_exclude_entities") or []
         self.tesla_prefix    = cfg.get("tesla_vehicle_prefix", "tesla")
         self.tesla_type      = cfg.get("tesla_type", "vehicle")  # "vehicle" or "energy"
 
@@ -337,7 +346,14 @@ class HACollector(BaseCollector):
                   if self.include_temps else {}
         devices = self.client.get_battery_devices(self.location_id, states) \
                   if self.include_batt else []
-        locks   = self.client.get_lock_devices(self.lock_entities, states) if self.lock_entities else []
+        locks   = (
+            self.client.get_lock_devices(
+                self.lock_entities,
+                exclude_entities=self.lock_exclude_entities,
+                states=states,
+            )
+            if self.lock_entities else []
+        )
 
         primary_temp = None
         if self.temp_sensor and self.temp_sensor in temps:
